@@ -368,7 +368,7 @@
       "Step 2: Verify server starts and listens on port 5000",
       "Step 3: Send a request and verify response"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "functional",
@@ -399,7 +399,7 @@
       "Step 2: Verify no startup banner is printed to stderr",
       "Step 3: Verify server still functions correctly"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "functional",
@@ -409,7 +409,7 @@
       "Step 2: Verify usage information is displayed",
       "Step 3: Verify all options are documented"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "functional",
