@@ -1,0 +1,286 @@
+# HTTP, WebSocket & SSE PAGI Message Format
+
+**Version**: 0.1 (Draft)
+
+The HTTP, WebSocket & SSE PAGI sub-specification defines how HTTP/1.1, HTTP/2, WebSocket, and Server-Side Events (SSE) connections are transported within PAGI.
+
+It is designed to be a superset of the PSGI specification and specifies how to translate between PAGI and PSGI for compatible requests.
+
+## Spec Versions
+
+- `0.1`: Initial draft, based on ASGI 2.5, including Server-Side Events support.
+
+## HTTP
+
+PAGI covers HTTP/1.0, HTTP/1.1, and HTTP/2. Protocol servers assign separate scopes for requests within the same HTTP/2 connection and multiplex responses appropriately.
+### HTTP/2 Stream Mapping
+PAGI servers must translate HTTP/2 frames into PAGI HTTP events per stream. Applications only see structured events, not raw frames:
+
+- **HEADERS**: start a new PAGI `http` scope and emit an initial `http.request` event with headers and `more => 1` if DATA will follow, or `more => 0` if `END_STREAM` was signaled immediately.
+- **DATA**: emit subsequent `http.request` events with `body => <chunk>` and `more => 1` or `0` depending on `END_STREAM`.
+- **END_STREAM**: if no DATA frames, send an `http.request` with `body => ''` and `more => 0` to signal end of request.
+- **RST_STREAM**: trigger a `http.disconnect` event and cancel any outstanding Futures for that scope.
+- **WINDOW_UPDATE / PRIORITY**: ignored by default (advanced flow control is optional).
+- **PUSH_PROMISE**: not supported; servers must reject push promises.
+
+Only HTTP/2 over TLS (`h2`) is required for the initial implementation; cleartext HTTP/2 (`h2c`) is optional.
+
+The HTTP version is available in the scope. Pseudo headers (like `:authority`) from HTTP/2 and HTTP/3 must be removed; if `:authority` is present, its value must be used to populate or override the `host` header.
+
+Multiple `Set-Cookie` headers must be preserved individually, and `Cookie` headers should be combined or split according to the version-specific rules (as per RFC 7230, RFC 6265, and RFC 9113).
+
+### Cookie Header Normalization
+
+PAGI servers **must normalize `Cookie` headers** before passing them to the application.
+
+- If multiple `Cookie:` headers are received from the client (which may happen in real-world deployments despite RFC guidance), the server must:
+  - Concatenate them using `"; "` (semicolon followed by space)
+  - Ensure only **one `cookie` header** appears in the PAGI `headers` list
+
+**Example:**
+
+If the client sends:
+
+```perl
+Cookie: a=1 Cookie: b=2; c=3
+```
+
+The PAGI scope must include:
+
+```perl
+headers => [
+  [ 'cookie', 'a=1; b=2; c=3' ]
+]
+```
+
+The server does not parse the cookie string into key-value pairs — parsing is left to middleware or application code. The server only guarantees RFC-compliant normalization.
+
+### HTTP Connection Scope
+
+Each HTTP request has a single-request connection scope. Scope keys:
+
+- `type` (String) -- `"http"`
+- `pagi["version"]` (String) -- PAGI version
+- `pagi["spec_version"]` (String) -- PAGI HTTP spec version (default `"0.1"`)
+- `http_version` (String) -- `"1.0"`, `"1.1"`, or `"2"`
+- `method` (String) -- Uppercase HTTP method
+- `scheme` (String, default `"http"`) -- URL scheme (`"http"` or `"https"`)
+- `path` (String) -- Decoded HTTP path
+- `raw_path` (Bytes, optional) -- Original HTTP path bytes
+- `query_string` (Bytes) -- Percent-encoded query string
+- `root_path` (String, default `""`) -- Application mount path, equivalent to `SCRIPT_NAME` in PSGI
+- `headers` (ArrayRef[ArrayRef[Bytes]]) -- Original HTTP headers. Header names **must** be lower-cased byte strings and header values must be opaque byte strings.
+- `client` (ArrayRef[String, Int], optional) -- `[host, port]` of client
+- `server` (ArrayRef[String, Optional[Int]], optional) -- `[host, port]` or `[path, undef]` for Unix sockets
+- `state` (HashRef, optional) -- State namespace from lifespan
+
+### Request - `receive` event
+
+Note: Chunked transfer encoding must be de-chunked by the server. Each `http.request` represents a de-chunked body fragment.
+
+Keys:
+
+- `type` -- `"http.request"`
+- `body` (Bytes, default `""`) -- Request body chunk
+- `more` (Int, default `0`) -- `1` if more body data is forthcoming, otherwise `0`
+
+### Response Start - `send` event
+
+Note: Protocol servers are not required to flush on `http.response.start`, giving flexibility to emit an error response in case of internal application errors before data is sent.
+
+Transfer-Encoding headers sent by the application must be ignored. Content-Encoding (e.g. gzip) is under application control.
+
+Keys:
+
+- `type` -- `"http.response.start"`
+- `status` (Int) -- HTTP status code
+- `headers` (ArrayRef[ArrayRef[Bytes]], default `[]`) -- Response headers
+- `trailers` (Int, default `0`) -- `1` if trailers will be sent after body via `http.response.trailers`, otherwise `0`
+
+### Response Body - `send` event
+
+Keys:
+
+- `type` -- `"http.response.body"`
+- `body` (Bytes, default `""`) -- Response body chunk
+- `more` (Int, default `0`) -- Indicates more body content to follow (`1` if true, otherwise `0`)
+
+### Response Trailers - `send` event
+
+Only valid when `http.response.start` was sent with `trailers => 1`. After trailers are transmitted the server must consider the response body complete.
+
+Keys:
+
+- `type` -- `"http.response.trailers"`
+- `headers` (ArrayRef[ArrayRef[Bytes]], default `[]`) -- Trailer headers encoded the same way as response headers (lower-case names, byte values)
+
+### Disconnected Client - `send` exception
+
+If the client disconnects or cancels the connection, servers MUST send an explicit `disconnect` event to the application.
+
+Any subsequent `$send` invocation **must** fail its returned `Future` (or throw) with a Perl exception class that indicates the disconnect (e.g., `PAGI::Error::Disconnected`). Servers MUST NOT expose Python exceptions such as `OSError`.
+
+Applications MUST gracefully handle disconnect events by:
+- Immediately halting unnecessary processing upon disconnect
+- Optionally sending minimal final acknowledgment messages
+- Executing asynchronous cleanup of resources as necessary.
+
+### Disconnect - `receive` event
+
+Sent to the application if receive is called after a response has been sent or after the HTTP connection has been closed.
+
+Keys:
+
+- `type` -- `"http.disconnect"`
+
+## WebSocket
+
+WebSocket servers handle fragmentation and PING/PONG messages. Servers must wait for a reply to `websocket.connect` before completing the handshake. If `websocket.close` is sent instead of `websocket.accept`, the server must reject the connection with HTTP 403.
+
+### WebSocket Connection Scope
+
+- `type` (String) -- `"websocket"`
+- `pagi["version"]` (String) -- PAGI version
+- `pagi["spec_version"]` (String) -- PAGI HTTP spec version (default `"0.1"`)
+- `http_version` (String, default `"1.1"`) -- HTTP version used for handshake
+- `scheme` (String, default `"ws"`) -- URL scheme (`"ws"` or `"wss"`)
+- `path` (String) -- Decoded path string
+- `raw_path` (Bytes, optional) -- Original path bytes from request
+- `query_string` (Bytes) -- Percent-encoded query string
+- `root_path` (String, default `""`) -- Mount point for application
+- `headers` (ArrayRef[ArrayRef[Bytes]]) -- Original headers
+- `client` (ArrayRef[String, Int], optional)
+- `server` (ArrayRef[String, Optional[Int]], optional)
+- `subprotocols` (ArrayRef[String], default `[]`)
+- `state` (HashRef, optional)
+  
+#### Handshake Headers and Subprotocols
+The `headers` arrayref **must** include all WebSocket handshake headers as raw byte strings, lower-cased, for example:
+  - `upgrade`, `connection`, `sec-websocket-key`, `sec-websocket-version`, `host`, etc.
+  - `sec-websocket-protocol` (if present)
+The `subprotocols` key is an arrayref of strings parsed from the `Sec-WebSocket-Protocol` header by splitting on commas and trimming whitespace. If the header is absent, `subprotocols` MUST be an empty arrayref.
+
+### WebSocket Events
+
+#### Connect - `receive` event
+
+- `type` -- `"websocket.connect"`
+
+#### Accept - `send` event
+
+- `type` -- `"websocket.accept"`
+- `subprotocol` (String, optional)
+- `headers` (ArrayRef[ArrayRef[Bytes]], optional)
+
+#### Receive - `receive` event
+
+- `type` -- `"websocket.receive"`
+- `bytes` (Bytes, optional)
+- `text` (String, optional)
+
+Exactly one must be non-null.
+
+#### Send - `send` event
+
+- `type` -- `"websocket.send"`
+- `bytes` (Bytes, optional)
+- `text` (String, optional)
+
+Exactly one must be non-null.
+
+#### Disconnect - `receive` event
+
+- `type` -- `"websocket.disconnect"`
+- `code` (Int, default `1005`)
+- `reason` (String, default empty)
+
+#### Disconnected Client - `send` exception
+
+Raises server-specific subclass of `OSError`.
+
+#### Close - `send` event
+
+- `type` -- `"websocket.close"`
+- `code` (Int, default `1000`)
+- `reason` (String, default empty)
+
+## Server-Side Events (SSE)
+
+SSE connections stream `text/event-stream` data to clients.
+
+### SSE Connection Detection
+PAGI servers must detect SSE requests and assign a scope of type `sse` when all of the following are true:
+- The HTTP method is `GET`.
+- The `Accept` header includes the media type `text/event-stream`.
+- The request has not been upgraded to WebSocket.
+Otherwise the connection uses a normal `http` scope.
+Routing based on URL or application logic is not used to infer SSE.
+
+### SSE Connection Scope
+
+SSE scopes reuse the HTTP scope structure. Servers must populate the same keys (`http_version`, `method`, `scheme`, `path`, `headers`, `client`, `server`, `state`, etc.) but set `type => 'sse'`. Header casing rules follow the HTTP section.
+
+### Start SSE - `send` event
+
+`sse.start` replaces `http.response.start` for SSE connections and must be sent before any `sse.send` events.
+
+- `type` -- `"sse.start"`
+- `status` (Int, default `200`)
+- `headers` (ArrayRef[ArrayRef[Bytes]]) -- Must include `content-type => 'text/event-stream'` unless already supplied by middleware.
+
+### Send SSE - `send` event
+
+`sse.send` emits a single SSE dispatch. Fields marked "String" are Unicode strings per the core data-type rules and must be UTF-8 encoded by the server before transmission.
+
+- `type` -- `"sse.send"`
+- `event` (String, optional)
+- `data` (String) -- Required text payload
+- `id` (String, optional)
+- `retry` (Int, optional) -- Milliseconds for the `retry:` directive
+
+To end the SSE stream the application simply returns after the final `sse.send`. The server will flush buffered events and close the HTTP connection.
+
+### SSE Disconnect - `receive` event
+
+Sent to the application if the client disconnects or if the server shuts down the SSE stream after `sse.start`.
+
+- `type` -- `"sse.disconnect"`
+
+## PAGI to PSGI Compatibility
+
+PAGI translates keys explicitly to maintain compatibility with PSGI:
+
+- `REQUEST_METHOD` → `method`
+- `SCRIPT_NAME` → `root_path`
+- `PATH_INFO` → `path` minus `root_path`
+- `QUERY_STRING` → `query_string`
+- `CONTENT_TYPE` → extracted from `headers`
+- `CONTENT_LENGTH` → extracted from `headers`
+- `SERVER_NAME`, `SERVER_PORT` → `server`
+- `REMOTE_ADDR`, `REMOTE_PORT` → `client`
+- `SERVER_PROTOCOL` → `http_version`
+- `psgi.url_scheme` → `scheme`
+- `psgi.version` → `[1, 1]` (PAGI servers must advertise the PSGI version they emulate when bridging)
+- `psgi.input` → constructed from `http.request` events
+- `psgi.errors` → handled by the server as appropriate (often tied to the loop's logging sink)
+- `psgi.streaming`, `psgi.nonblocking`, `psgi.multithread`, `psgi.multiprocess` → derived from PAGI server capabilities and advertised via PSGI adapter docs
+
+Response mappings:
+
+- `status` and `headers` map directly to `http.response.start`
+- Body content from PSGI maps directly to `http.response.body` messages.
+
+## PAGI Encoding Differences
+
+- `path`: Decoded UTF-8 string from percent-encoded input
+- `headers`: Represented as bytes exactly as sent/received
+- `query_string`: Raw bytes from URL after `?`, percent-encoded
+- `root_path`: Unicode path string matching `SCRIPT_NAME`
+
+## Version History
+
+- `0.1` (Draft): Initial draft based on ASGI 2.5, supporting HTTP, WebSocket, and SSE.
+
+## Copyright
+
+This document has been placed in the public domain.
