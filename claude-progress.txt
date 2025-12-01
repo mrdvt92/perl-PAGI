@@ -1,5 +1,73 @@
 # PAGI Reference Server - Development Progress
 
+## Session 5: Step 3 - Request Body Handling (2024-11-30)
+
+### Completed Tasks
+
+1. **Completed Step 2: Client Disconnect Detection**
+   - Added test for client disconnect mid-stream
+   - Verified http.disconnect event is emitted when client closes connection
+   - App can detect disconnect via Future pattern
+
+2. **Implemented Step 3: Request Body Handling**
+   - Content-Length based body reading with proper byte counting
+   - Chunked Transfer-Encoding decoding for request bodies
+   - Large body streaming (64KB chunks via multiple http.request events)
+   - Updated on_read handler to notify pending receive Futures
+
+3. **Added parse_chunked_body() to Protocol::HTTP1**
+   - Parses chunked Transfer-Encoding body format
+   - Returns decoded data, bytes consumed, and completion flag
+   - Handles chunk extensions (stripped)
+
+4. **Fixed examples/03-request-body/app.pl**
+   - Changed return statement to `\&app;` for proper `do` loading
+
+5. **Created comprehensive t/03-request-body.t tests**
+   - POST body echo test
+   - GET without body returns "No body provided"
+   - Large body (100KB) arrives correctly
+   - Chunked Transfer-Encoding decoding test
+
+### Test Results
+
+All tests pass:
+```
+prove -l t/
+All tests successful.
+Files=10, Tests=23
+```
+
+### Features Marked as Passing (14/75)
+
+New features passing (5 new):
+- Client disconnect detection stops the streaming app
+- Request body handling - 03-request-body app echoes POST body
+- GET request without body receives empty body event
+- Large request body arrives as multiple http.request events
+- Chunked Transfer-Encoding on request body works correctly
+
+### Key Code Changes
+
+**lib/PAGI/Server/Protocol/HTTP1.pm:**
+- Added `parse_chunked_body()` method for de-chunking request bodies
+
+**lib/PAGI/Server/Connection.pm:**
+- Rewrote `_create_receive()` for proper Content-Length handling
+- Added chunked body parsing for Transfer-Encoding: chunked requests
+- Added body streaming with 64KB chunks for large bodies
+- Updated `on_read` handler to complete pending receive Futures
+
+### Next Steps for Future Sessions
+
+1. **Step 4: WebSocket Support** (next priority)
+   - Detect WebSocket upgrade requests
+   - Create websocket scope with subprotocols
+   - Use Protocol::WebSocket for frame parsing/building
+   - Implement websocket.connect, websocket.accept, websocket.send, websocket.close events
+
+---
+
 ## Session 4: Step 2 - Streaming Responses (2024-11-30)
 
 ### Completed Tasks

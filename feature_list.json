@@ -74,7 +74,7 @@
       "Step 4: Verify http.disconnect event is emitted to the app",
       "Step 5: Verify app stops streaming and cleans up resources"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "functional",
@@ -85,7 +85,7 @@
       "Step 3: Verify response status is 200",
       "Step 4: Verify response body contains 'You sent: Hello World'"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "functional",
@@ -95,7 +95,7 @@
       "Step 2: Send a GET request without body",
       "Step 3: Verify response contains 'No body provided'"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "functional",
@@ -106,7 +106,7 @@
       "Step 3: Verify the complete body is received and echoed correctly",
       "Step 4: Verify intermediate events have more => 1, final has more => 0"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "functional",
@@ -117,7 +117,7 @@
       "Step 3: Verify the body is de-chunked before passing to app",
       "Step 4: Verify response echoes the complete body"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "functional",
