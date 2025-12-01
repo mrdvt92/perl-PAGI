@@ -1162,7 +1162,7 @@
       "Step 2: Send request with Cookie header",
       "Step 3: Verify scope->{cookies} contains parsed cookies"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "functional",
@@ -1173,7 +1173,7 @@
       "Step 3: Send second request with session cookie",
       "Step 4: Verify session data is restored"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "functional",
@@ -1185,7 +1185,7 @@
       "Step 4: Send request with valid credentials",
       "Step 5: Verify request succeeds with scope->{auth}"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "functional",
@@ -1197,7 +1197,7 @@
       "Step 4: Send request with invalid token",
       "Step 5: Verify response is 401"
     ],
-    "passes": false
+    "passes": true
   },
 
   {
@@ -1208,7 +1208,7 @@
       "Step 2: Send request matching pattern",
       "Step 3: Verify path is rewritten for inner app"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "functional",
@@ -1218,7 +1218,7 @@
       "Step 2: Send HTTP request",
       "Step 3: Verify 301/302 redirect to HTTPS URL"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "functional",
@@ -1229,7 +1229,7 @@
       "Step 3: Verify scope client info is updated",
       "Step 4: Verify X-Forwarded-Proto updates scheme"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "functional",
@@ -1240,7 +1240,7 @@
       "Step 3: Verify 200 response with status info",
       "Step 4: Verify other paths pass through to app"
     ],
-    "passes": false
+    "passes": true
   },
 
   {
