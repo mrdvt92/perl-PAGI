@@ -835,5 +835,779 @@
       "Step 3: Verify on_error callback receives error details"
     ],
     "passes": true
+  },
+
+  {
+    "category": "functional",
+    "description": "Step 13: Middleware base class wrap() returns valid PAGI app",
+    "steps": [
+      "Step 1: Create a PAGI::Middleware subclass with wrap() method",
+      "Step 2: Call wrap($app) with a PAGI app",
+      "Step 3: Verify returned value is a valid async sub",
+      "Step 4: Verify wrapped app handles requests correctly"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 13: Middleware builder DSL composes multiple middleware",
+    "steps": [
+      "Step 1: Use Builder->new->enable('Middleware1')->enable('Middleware2')->to_app($app)",
+      "Step 2: Send request to composed app",
+      "Step 3: Verify both middleware are applied in correct order"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 13: enable_if conditionally applies middleware",
+    "steps": [
+      "Step 1: Use enable_if { condition } 'Middleware', %config",
+      "Step 2: Send request matching condition",
+      "Step 3: Verify middleware is applied",
+      "Step 4: Send request not matching condition",
+      "Step 5: Verify middleware is skipped"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 13: Middleware can modify scope without mutating original",
+    "steps": [
+      "Step 1: Create middleware that adds custom key to scope",
+      "Step 2: Verify inner app receives modified scope",
+      "Step 3: Verify original scope object is not mutated"
+    ],
+    "passes": false
+  },
+
+  {
+    "category": "functional",
+    "description": "Step 14: ContentLength middleware adds accurate header",
+    "steps": [
+      "Step 1: Enable ContentLength middleware",
+      "Step 2: Send request to app that doesn't set Content-Length",
+      "Step 3: Verify response has Content-Length header",
+      "Step 4: Verify Content-Length value matches actual body size"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 14: Head middleware suppresses response body",
+    "steps": [
+      "Step 1: Enable Head middleware",
+      "Step 2: Send HEAD request to app",
+      "Step 3: Verify response has headers but no body",
+      "Step 4: Verify Content-Length is preserved from original response"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 14: ErrorHandler middleware catches exceptions",
+    "steps": [
+      "Step 1: Enable ErrorHandler middleware",
+      "Step 2: Send request to app that throws exception",
+      "Step 3: Verify response is 500 with error page",
+      "Step 4: Verify stack trace shown in development mode only"
+    ],
+    "passes": false
+  },
+
+  {
+    "category": "functional",
+    "description": "Step 15: Static middleware serves files with correct MIME types",
+    "steps": [
+      "Step 1: Enable Static middleware with root directory",
+      "Step 2: Request a .html file",
+      "Step 3: Verify Content-Type is text/html",
+      "Step 4: Request a .js file",
+      "Step 5: Verify Content-Type is application/javascript"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 15: Static middleware prevents path traversal attacks",
+    "steps": [
+      "Step 1: Enable Static middleware",
+      "Step 2: Request path with ../ sequences",
+      "Step 3: Verify response is 403 or 404",
+      "Step 4: Verify file outside root is not served"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 15: Static middleware supports ETag and 304 responses",
+    "steps": [
+      "Step 1: Enable Static middleware",
+      "Step 2: Request a file and note ETag header",
+      "Step 3: Request same file with If-None-Match header",
+      "Step 4: Verify response is 304 Not Modified"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 15: Static middleware supports Range requests",
+    "steps": [
+      "Step 1: Enable Static middleware",
+      "Step 2: Request file with Range: bytes=0-99 header",
+      "Step 3: Verify response is 206 Partial Content",
+      "Step 4: Verify Content-Range header is present"
+    ],
+    "passes": false
+  },
+
+  {
+    "category": "functional",
+    "description": "Step 16: AccessLog middleware logs requests in combined format",
+    "steps": [
+      "Step 1: Enable AccessLog middleware",
+      "Step 2: Send request to app",
+      "Step 3: Verify log contains client IP, method, path, status, size"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 16: RequestId middleware generates unique request IDs",
+    "steps": [
+      "Step 1: Enable RequestId middleware",
+      "Step 2: Send multiple requests",
+      "Step 3: Verify X-Request-ID header in each response",
+      "Step 4: Verify IDs are unique"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 16: Runtime middleware adds X-Runtime header",
+    "steps": [
+      "Step 1: Enable Runtime middleware",
+      "Step 2: Send request to app",
+      "Step 3: Verify X-Runtime header is present",
+      "Step 4: Verify value is a valid duration"
+    ],
+    "passes": false
+  },
+
+  {
+    "category": "functional",
+    "description": "Step 17: CORS middleware handles preflight requests",
+    "steps": [
+      "Step 1: Enable CORS middleware with allowed origins",
+      "Step 2: Send OPTIONS preflight request",
+      "Step 3: Verify Access-Control-Allow-Origin header",
+      "Step 4: Verify Access-Control-Allow-Methods header"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 17: SecurityHeaders middleware adds security headers",
+    "steps": [
+      "Step 1: Enable SecurityHeaders middleware",
+      "Step 2: Send request to app",
+      "Step 3: Verify X-Content-Type-Options: nosniff",
+      "Step 4: Verify X-Frame-Options header present"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 17: TrustedHosts middleware validates Host header",
+    "steps": [
+      "Step 1: Enable TrustedHosts middleware with allowed hosts",
+      "Step 2: Send request with valid Host header",
+      "Step 3: Verify request passes through",
+      "Step 4: Send request with invalid Host",
+      "Step 5: Verify response is 400 Bad Request"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 17: CSRF middleware validates tokens on POST requests",
+    "steps": [
+      "Step 1: Enable CSRF middleware",
+      "Step 2: Send POST without CSRF token",
+      "Step 3: Verify response is 403",
+      "Step 4: Send POST with valid CSRF token",
+      "Step 5: Verify request succeeds"
+    ],
+    "passes": false
+  },
+
+  {
+    "category": "functional",
+    "description": "Step 18: GZip middleware compresses responses",
+    "steps": [
+      "Step 1: Enable GZip middleware",
+      "Step 2: Send request with Accept-Encoding: gzip",
+      "Step 3: Verify Content-Encoding: gzip in response",
+      "Step 4: Verify response body is compressed"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 18: ETag middleware generates ETags",
+    "steps": [
+      "Step 1: Enable ETag middleware",
+      "Step 2: Send request to app",
+      "Step 3: Verify ETag header in response",
+      "Step 4: Verify ETag is stable for same content"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 18: ConditionalGet middleware returns 304 for matching ETag",
+    "steps": [
+      "Step 1: Enable ConditionalGet and ETag middleware",
+      "Step 2: Request resource and note ETag",
+      "Step 3: Request same resource with If-None-Match",
+      "Step 4: Verify response is 304 Not Modified"
+    ],
+    "passes": false
+  },
+
+  {
+    "category": "functional",
+    "description": "Step 19: RateLimit middleware enforces request limits",
+    "steps": [
+      "Step 1: Enable RateLimit middleware with low limit",
+      "Step 2: Send requests up to limit",
+      "Step 3: Verify requests succeed",
+      "Step 4: Send request exceeding limit",
+      "Step 5: Verify response is 429 Too Many Requests"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 19: RateLimit middleware adds X-RateLimit headers",
+    "steps": [
+      "Step 1: Enable RateLimit middleware",
+      "Step 2: Send request",
+      "Step 3: Verify X-RateLimit-Limit header",
+      "Step 4: Verify X-RateLimit-Remaining header",
+      "Step 5: Verify X-RateLimit-Reset header"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 19: Timeout middleware cancels slow requests",
+    "steps": [
+      "Step 1: Enable Timeout middleware with short timeout",
+      "Step 2: Send request to slow app",
+      "Step 3: Verify response is 408 or 504 after timeout",
+      "Step 4: Verify app Future is cancelled"
+    ],
+    "passes": false
+  },
+
+  {
+    "category": "functional",
+    "description": "Step 20: JSONBody middleware parses JSON request bodies",
+    "steps": [
+      "Step 1: Enable JSONBody middleware",
+      "Step 2: Send POST with Content-Type: application/json",
+      "Step 3: Verify scope->{json_body} contains parsed data"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 20: FormBody middleware parses form data",
+    "steps": [
+      "Step 1: Enable FormBody middleware",
+      "Step 2: Send POST with application/x-www-form-urlencoded",
+      "Step 3: Verify scope->{form_body} contains parsed fields"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 20: FormBody middleware handles multipart file uploads",
+    "steps": [
+      "Step 1: Enable FormBody middleware",
+      "Step 2: Send POST with multipart/form-data and file",
+      "Step 3: Verify scope->{uploads} contains file info",
+      "Step 4: Verify file content is accessible"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 20: ContentNegotiation middleware parses Accept header",
+    "steps": [
+      "Step 1: Enable ContentNegotiation middleware",
+      "Step 2: Send request with Accept: text/html, application/json;q=0.9",
+      "Step 3: Verify scope contains negotiation info",
+      "Step 4: Verify types are ordered by preference"
+    ],
+    "passes": false
+  },
+
+  {
+    "category": "functional",
+    "description": "Step 21: Cookie middleware parses cookies",
+    "steps": [
+      "Step 1: Enable Cookie middleware",
+      "Step 2: Send request with Cookie header",
+      "Step 3: Verify scope->{cookies} contains parsed cookies"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 21: Session middleware persists session data",
+    "steps": [
+      "Step 1: Enable Session middleware",
+      "Step 2: Send request and set session data",
+      "Step 3: Send second request with session cookie",
+      "Step 4: Verify session data is restored"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 21: Auth::Basic middleware validates credentials",
+    "steps": [
+      "Step 1: Enable Auth::Basic middleware",
+      "Step 2: Send request without Authorization",
+      "Step 3: Verify 401 with WWW-Authenticate challenge",
+      "Step 4: Send request with valid credentials",
+      "Step 5: Verify request succeeds with scope->{auth}"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 21: Auth::Bearer middleware validates JWT tokens",
+    "steps": [
+      "Step 1: Enable Auth::Bearer middleware",
+      "Step 2: Send request with valid Bearer token",
+      "Step 3: Verify scope->{auth} contains JWT claims",
+      "Step 4: Send request with invalid token",
+      "Step 5: Verify response is 401"
+    ],
+    "passes": false
+  },
+
+  {
+    "category": "functional",
+    "description": "Step 22: Rewrite middleware rewrites URLs",
+    "steps": [
+      "Step 1: Enable Rewrite middleware with pattern",
+      "Step 2: Send request matching pattern",
+      "Step 3: Verify path is rewritten for inner app"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 22: HTTPSRedirect middleware forces HTTPS",
+    "steps": [
+      "Step 1: Enable HTTPSRedirect middleware",
+      "Step 2: Send HTTP request",
+      "Step 3: Verify 301/302 redirect to HTTPS URL"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 22: ReverseProxy middleware handles X-Forwarded headers",
+    "steps": [
+      "Step 1: Enable ReverseProxy middleware with trusted proxies",
+      "Step 2: Send request with X-Forwarded-For header",
+      "Step 3: Verify scope client info is updated",
+      "Step 4: Verify X-Forwarded-Proto updates scheme"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 22: Healthcheck middleware responds to health checks",
+    "steps": [
+      "Step 1: Enable Healthcheck middleware on /health",
+      "Step 2: Send request to /health",
+      "Step 3: Verify 200 response with status info",
+      "Step 4: Verify other paths pass through to app"
+    ],
+    "passes": false
+  },
+
+  {
+    "category": "functional",
+    "description": "Step 23: WebSocket::Heartbeat middleware sends pings",
+    "steps": [
+      "Step 1: Enable WebSocket::Heartbeat middleware",
+      "Step 2: Open WebSocket connection",
+      "Step 3: Wait for heartbeat interval",
+      "Step 4: Verify PING frame is sent"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 23: SSE::Retry middleware adds retry field",
+    "steps": [
+      "Step 1: Enable SSE::Retry middleware",
+      "Step 2: Connect to SSE endpoint",
+      "Step 3: Verify retry: field in SSE events"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 23: SSE::Heartbeat middleware sends keepalives",
+    "steps": [
+      "Step 1: Enable SSE::Heartbeat middleware",
+      "Step 2: Connect to SSE endpoint",
+      "Step 3: Wait for heartbeat interval",
+      "Step 4: Verify comment line (: keepalive) is sent"
+    ],
+    "passes": false
+  },
+
+  {
+    "category": "functional",
+    "description": "Step 24: Debug middleware injects debug panel",
+    "steps": [
+      "Step 1: Enable Debug middleware in development mode",
+      "Step 2: Send request returning HTML",
+      "Step 3: Verify debug panel is injected",
+      "Step 4: Verify debug shows request/response info"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 24: Lint middleware validates PAGI compliance",
+    "steps": [
+      "Step 1: Enable Lint middleware",
+      "Step 2: Run app with spec violations",
+      "Step 3: Verify warnings are generated"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 24: Maintenance middleware serves maintenance page",
+    "steps": [
+      "Step 1: Enable Maintenance middleware",
+      "Step 2: Send request",
+      "Step 3: Verify 503 response with maintenance page",
+      "Step 4: Verify bypass works for admin IPs"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 24: MethodOverride middleware supports _method parameter",
+    "steps": [
+      "Step 1: Enable MethodOverride middleware",
+      "Step 2: Send POST with _method=DELETE",
+      "Step 3: Verify inner app sees DELETE method"
+    ],
+    "passes": false
+  },
+
+  {
+    "category": "functional",
+    "description": "Step 25: WebSocket::Compression middleware compresses messages",
+    "steps": [
+      "Step 1: Enable WebSocket::Compression middleware",
+      "Step 2: Open WebSocket with permessage-deflate extension",
+      "Step 3: Send large text message",
+      "Step 4: Verify message is compressed on wire"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 25: WebSocket::RateLimit middleware limits message rate",
+    "steps": [
+      "Step 1: Enable WebSocket::RateLimit middleware",
+      "Step 2: Send messages rapidly",
+      "Step 3: Verify rate limit is enforced",
+      "Step 4: Verify connection closed on excessive messages"
+    ],
+    "passes": false
+  },
+
+  {
+    "category": "functional",
+    "description": "Step 27: App::File serves static files",
+    "steps": [
+      "Step 1: Create PAGI::App::File with root directory",
+      "Step 2: Request existing file",
+      "Step 3: Verify file content is returned",
+      "Step 4: Verify correct MIME type"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 27: App::File prevents path traversal",
+    "steps": [
+      "Step 1: Create PAGI::App::File",
+      "Step 2: Request /../../../etc/passwd",
+      "Step 3: Verify 403 or 404 response"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 27: App::Directory lists directory contents",
+    "steps": [
+      "Step 1: Create PAGI::App::Directory",
+      "Step 2: Request a directory path",
+      "Step 3: Verify HTML listing is returned",
+      "Step 4: Verify listing contains file links"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 27: App::Directory serves index files",
+    "steps": [
+      "Step 1: Create PAGI::App::Directory with index file",
+      "Step 2: Request directory containing index.html",
+      "Step 3: Verify index.html content is returned"
+    ],
+    "passes": false
+  },
+
+  {
+    "category": "functional",
+    "description": "Step 28: App::URLMap routes by path prefix",
+    "steps": [
+      "Step 1: Create URLMap with /api => $api_app, /web => $web_app",
+      "Step 2: Request /api/users",
+      "Step 3: Verify $api_app handles request",
+      "Step 4: Verify path is adjusted for mounted app"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 28: App::Cascade tries apps in sequence",
+    "steps": [
+      "Step 1: Create Cascade with [$app1, $app2]",
+      "Step 2: Request path where $app1 returns 404",
+      "Step 3: Verify $app2 handles request"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 28: App::NotFound returns customizable 404",
+    "steps": [
+      "Step 1: Create NotFound with custom template",
+      "Step 2: Send any request",
+      "Step 3: Verify 404 response with custom body"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 28: App::Redirect performs URL redirects",
+    "steps": [
+      "Step 1: Create Redirect to /new-location",
+      "Step 2: Send request",
+      "Step 3: Verify 301/302 response",
+      "Step 4: Verify Location header points to /new-location"
+    ],
+    "passes": false
+  },
+
+  {
+    "category": "functional",
+    "description": "Step 29: App::Router matches routes by method and path",
+    "steps": [
+      "Step 1: Create Router with GET /users/:id route",
+      "Step 2: Send GET /users/123",
+      "Step 3: Verify route handler called",
+      "Step 4: Verify params->{id} = 123"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 29: App::Router returns 405 for wrong method",
+    "steps": [
+      "Step 1: Create Router with GET /users",
+      "Step 2: Send POST /users",
+      "Step 3: Verify 405 Method Not Allowed response"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 29: App::Router generates URLs from named routes",
+    "steps": [
+      "Step 1: Create Router with named route 'user' => GET /users/:id",
+      "Step 2: Call url_for('user', id => 123)",
+      "Step 3: Verify returns /users/123"
+    ],
+    "passes": false
+  },
+
+  {
+    "category": "functional",
+    "description": "Step 30: App::Proxy forwards requests to backend",
+    "steps": [
+      "Step 1: Create Proxy pointing to backend server",
+      "Step 2: Send request through proxy",
+      "Step 3: Verify request reaches backend",
+      "Step 4: Verify response returned to client"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 30: App::WrapCGI executes CGI scripts",
+    "steps": [
+      "Step 1: Create WrapCGI with CGI script path",
+      "Step 2: Send request",
+      "Step 3: Verify CGI script is executed",
+      "Step 4: Verify CGI output returned as response"
+    ],
+    "passes": false
+  },
+
+  {
+    "category": "functional",
+    "description": "Step 31: App::Healthcheck returns health status",
+    "steps": [
+      "Step 1: Create Healthcheck app",
+      "Step 2: Send request to health endpoint",
+      "Step 3: Verify 200 response with status JSON"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 31: App::Loader loads app from file",
+    "steps": [
+      "Step 1: Create Loader with app file path",
+      "Step 2: Send request",
+      "Step 3: Verify app is loaded and handles request"
+    ],
+    "passes": false
+  },
+
+  {
+    "category": "functional",
+    "description": "Step 32: App::WebSocket::Echo echoes messages",
+    "steps": [
+      "Step 1: Create WebSocket::Echo app",
+      "Step 2: Connect via WebSocket",
+      "Step 3: Send message",
+      "Step 4: Verify message is echoed back"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 32: App::WebSocket::Broadcast delivers to all clients",
+    "steps": [
+      "Step 1: Create WebSocket::Broadcast app",
+      "Step 2: Connect multiple clients",
+      "Step 3: Publish message",
+      "Step 4: Verify all clients receive message"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 32: App::WebSocket::Chat supports rooms",
+    "steps": [
+      "Step 1: Create WebSocket::Chat app",
+      "Step 2: Connect clients to different rooms",
+      "Step 3: Send message in room A",
+      "Step 4: Verify only room A clients receive it"
+    ],
+    "passes": false
+  },
+
+  {
+    "category": "functional",
+    "description": "Step 33: App::SSE::Stream delivers events",
+    "steps": [
+      "Step 1: Create SSE::Stream app with event generator",
+      "Step 2: Connect via EventSource",
+      "Step 3: Verify events are received",
+      "Step 4: Verify event format is correct"
+    ],
+    "passes": false
+  },
+  {
+    "category": "functional",
+    "description": "Step 33: App::SSE::Pubsub supports channels",
+    "steps": [
+      "Step 1: Create SSE::Pubsub app",
+      "Step 2: Subscribe to channel A",
+      "Step 3: Publish event to channel A",
+      "Step 4: Verify subscriber receives event"
+    ],
+    "passes": false
+  },
+
+  {
+    "category": "functional",
+    "description": "Step 34: App::Throttle limits request rate",
+    "steps": [
+      "Step 1: Create Throttle app wrapping inner app",
+      "Step 2: Send requests up to limit",
+      "Step 3: Verify excess requests are throttled"
+    ],
+    "passes": false
+  },
+
+  {
+    "category": "style",
+    "description": "All middleware modules have POD documentation",
+    "steps": [
+      "Step 1: Check all PAGI::Middleware::* modules have POD",
+      "Step 2: Verify NAME, SYNOPSIS, DESCRIPTION sections",
+      "Step 3: Verify configuration options documented"
+    ],
+    "passes": false
+  },
+  {
+    "category": "style",
+    "description": "All App modules have POD documentation",
+    "steps": [
+      "Step 1: Check all PAGI::App::* modules have POD",
+      "Step 2: Verify NAME, SYNOPSIS, DESCRIPTION sections",
+      "Step 3: Verify usage examples are runnable"
+    ],
+    "passes": false
+  },
+  {
+    "category": "style",
+    "description": "Middleware test suite passes",
+    "steps": [
+      "Step 1: Run prove -l t/middleware/",
+      "Step 2: Verify all tests pass"
+    ],
+    "passes": false
+  },
+  {
+    "category": "style",
+    "description": "App test suite passes",
+    "steps": [
+      "Step 1: Run prove -l t/app/",
+      "Step 2: Verify all tests pass"
+    ],
+    "passes": false
   }
 ]

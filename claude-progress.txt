@@ -1,5 +1,63 @@
 # PAGI Reference Server - Development Progress
 
+## Session 17: Add Middleware and Application Feature Tests (2025-12-01)
+
+### Completed Tasks
+
+1. **Added 70 New Feature Tests for Steps 13-35**
+   - Updated `feature_list.json` with comprehensive test cases
+   - Covers all middleware implementation steps (13-26)
+   - Covers all bundled application steps (27-35)
+   - Total features: 145 (75 passing, 70 pending)
+
+### New Feature Categories Added
+
+**Middleware Infrastructure (Step 13):**
+- Middleware base class wrap() method
+- Builder DSL for middleware composition
+- Conditional middleware (enable_if)
+- Scope modification without mutation
+
+**Core HTTP Middleware (Steps 14-18):**
+- ContentLength, Head, ErrorHandler
+- Static file serving with path traversal prevention
+- AccessLog, RequestId, Runtime
+- CORS, SecurityHeaders, TrustedHosts, CSRF
+- GZip compression, ETag, ConditionalGet
+
+**Advanced Middleware (Steps 19-25):**
+- RateLimit, Timeout
+- JSONBody, FormBody, ContentNegotiation
+- Cookie, Session, Auth::Basic, Auth::Bearer
+- Rewrite, HTTPSRedirect, ReverseProxy, Healthcheck
+- WebSocket::Heartbeat, SSE::Retry, SSE::Heartbeat
+- Debug, Lint, Maintenance, MethodOverride
+- WebSocket::Compression, WebSocket::RateLimit
+
+**Bundled Applications (Steps 27-34):**
+- App::File, App::Directory (static serving)
+- App::URLMap, App::Cascade, App::NotFound, App::Redirect
+- App::Router (URL routing with params)
+- App::Proxy, App::WrapCGI
+- App::Healthcheck, App::Loader
+- App::WebSocket::Echo, ::Chat, ::Broadcast
+- App::SSE::Stream, ::Pubsub
+- App::Throttle
+
+### Features Status: 75/145 passing (52%)
+
+- Steps 1-12 (Server): 75/75 passing (100%)
+- Steps 13-35 (Middleware/Apps): 0/70 passing (0%)
+
+### Next Steps
+
+1. **Step 13: Middleware Base Infrastructure**
+   - Create PAGI::Middleware base class
+   - Implement builder DSL
+   - Write t/middleware/00-base.t
+
+---
+
 ## Session 16: Complete All Tests - 75/75 Passing (2024-12-01)
 
 ### Completed Tasks
