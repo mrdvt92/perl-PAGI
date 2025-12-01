@@ -1,5 +1,59 @@
 # PAGI Reference Server - Development Progress
 
+## Session 19: Step 15 - Static File Middleware (2025-12-01)
+
+### Completed Tasks
+
+1. **Implemented PAGI::Middleware::Static**
+   - Serves static files from configurable root directory
+   - MIME type detection for 25+ file types
+   - Path traversal protection (rejects ../ attempts with 403)
+   - ETag generation and 304 Not Modified support
+   - Range request support (206 Partial Content)
+   - Index file serving for directories
+   - Pass-through option to fall back to inner app
+   - HEAD request handling
+
+2. **Created comprehensive tests (16 subtests)**
+   - MIME type tests for HTML, JS, CSS
+   - Path traversal prevention tests
+   - ETag and 304 caching tests
+   - Range request tests (partial content, suffix ranges, invalid ranges)
+   - Directory index, pass-through, HEAD handling
+
+### Test Results
+
+All tests pass:
+```
+prove -l t/
+All tests successful.
+Files=12, Tests=86
+```
+
+### Features Status: 86/147 passing (59%)
+
+- Steps 1-12 (Server): 75/75 passing (100%)
+- Step 13 (Infrastructure): 4/4 passing (100%)
+- Step 14 (Core HTTP): 3/3 passing (100%)
+- Step 15 (Static Files): 4/4 passing (100%)
+- Steps 16-35 (Remaining): 0/61 passing (0%)
+
+### Key Code Changes
+
+**New files:**
+- lib/PAGI/Middleware/Static.pm
+- t/middleware/04-static.t
+- t/static_test_files/ (test fixtures)
+
+### Next Steps
+
+1. **Step 16: Logging Middleware**
+   - AccessLog middleware (combined format)
+   - RequestId middleware (unique IDs)
+   - Runtime middleware (X-Runtime header)
+
+---
+
 ## Session 18: Step 14 - Core HTTP Middleware (2025-12-01)
 
 ### Completed Tasks

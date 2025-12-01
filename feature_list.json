@@ -925,7 +925,7 @@
       "Step 4: Request a .js file",
       "Step 5: Verify Content-Type is application/javascript"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "functional",
@@ -936,7 +936,7 @@
       "Step 3: Verify response is 403 or 404",
       "Step 4: Verify file outside root is not served"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "functional",
@@ -947,7 +947,7 @@
       "Step 3: Request same file with If-None-Match header",
       "Step 4: Verify response is 304 Not Modified"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "functional",
@@ -958,7 +958,7 @@
       "Step 3: Verify response is 206 Partial Content",
       "Step 4: Verify Content-Range header is present"
     ],
-    "passes": false
+    "passes": true
   },
 
   {
