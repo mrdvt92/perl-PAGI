@@ -209,7 +209,8 @@ subtest 'method chaining' => sub {
         ->error(500 => sub ($c, $e) { $c->text('Broken'); })
         ->get('/' => sub ($c) { $c->text('Hi'); });
 
-    is($result, $app, 'chaining works');
+    # Route methods return RouteHandle for ->name() chaining
+    ok($result->can('get'), 'chaining works');
 };
 
 # Test 12: Multiple error handlers coexist

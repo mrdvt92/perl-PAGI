@@ -271,7 +271,8 @@ subtest 'method chaining' => sub {
         ->static('/assets' => $tmpdir)
         ->get('/hello' => sub ($c) { $c->text('Hi') });
 
-    is($result, $app, 'chaining works');
+    # Route methods return RouteHandle for ->name() chaining
+    ok($result->can('get'), 'chaining works');
 };
 
 # Test 18: Prefix normalization

@@ -34,6 +34,288 @@ PAGI::Simple::SSE - Server-Sent Events context for PAGI::Simple
 PAGI::Simple::SSE provides a context object for handling Server-Sent Events
 connections. It wraps the low-level PAGI SSE protocol with a convenient API.
 
+Server-Sent Events (SSE) is a standard for pushing updates from server to
+client over HTTP. Unlike WebSocket, SSE is:
+
+=over 4
+
+=item * One-way (server to client only)
+
+=item * Uses standard HTTP (works with proxies, load balancers)
+
+=item * Automatically reconnects on disconnect
+
+=item * Supports event types and IDs for message tracking
+
+=back
+
+=head1 COMPLETE EXAMPLES
+
+=head2 Event IDs and Retry Handling
+
+Event IDs allow clients to resume from where they left off after
+a disconnection. The retry field controls reconnection timing:
+
+    $app->sse('/stream' => sub ($sse) {
+        my $event_id = 0;
+
+        # Set retry interval (client will wait this long before reconnecting)
+        $sse->send_event(
+            data  => 'Connected',
+            retry => 5000,  # 5 seconds
+        );
+
+        # Send events with incrementing IDs
+        $sse->subscribe('updates', sub ($msg) {
+            $event_id++;
+            $sse->send_event(
+                data  => $msg,
+                id    => $event_id,
+                event => 'update',
+            );
+        });
+
+        # The 'id' field is remembered by the browser
+        # On reconnect, it sends Last-Event-ID header
+    });
+
+=head2 Reconnection with Last-Event-ID
+
+When a client reconnects, it sends the last received event ID.
+Use this to replay missed events:
+
+    $app->sse('/events/:user_id' => sub ($sse) {
+        my $user_id = $sse->path_params->{user_id};
+
+        # Check for Last-Event-ID header (reconnection)
+        my $last_id = $sse->scope->{headers}
+            ? (grep { $_->[0] eq 'last-event-id' } @{$sse->scope->{headers}})[0]
+            : undef;
+        $last_id = $last_id->[1] if $last_id;
+
+        if ($last_id) {
+            # Client is reconnecting - replay missed events
+            my @missed = get_events_since($user_id, $last_id);
+            for my $event (@missed) {
+                $sse->send_event(
+                    data  => $event->{data},
+                    id    => $event->{id},
+                    event => $event->{type},
+                );
+            }
+        }
+
+        # Subscribe to live updates
+        $sse->subscribe("user:$user_id:events", sub ($event) {
+            $sse->send_event(
+                data  => $event->{data},
+                id    => $event->{id},
+                event => $event->{type},
+            );
+        });
+
+        $sse->on(close => sub {
+            # Optionally log disconnect
+        });
+    });
+
+=head2 Multiple Event Types
+
+Use different event types to distinguish message categories.
+The client can listen for specific types:
+
+    # Server-side
+    $app->sse('/dashboard' => sub ($sse) {
+        # Subscribe to multiple channels with different event types
+        $sse->subscribe('metrics:cpu', sub ($data) {
+            $sse->send_event(
+                event => 'cpu',
+                data  => $data,
+            );
+        });
+
+        $sse->subscribe('metrics:memory', sub ($data) {
+            $sse->send_event(
+                event => 'memory',
+                data  => $data,
+            );
+        });
+
+        $sse->subscribe('alerts', sub ($data) {
+            $sse->send_event(
+                event => 'alert',
+                data  => $data,
+            );
+        });
+
+        # Send initial state
+        $sse->send_event(
+            event => 'connected',
+            data  => { server_time => time() },
+        );
+    });
+
+    # Client-side JavaScript:
+    # const events = new EventSource('/dashboard');
+    #
+    # events.addEventListener('cpu', (e) => {
+    #     updateCpuChart(JSON.parse(e.data));
+    # });
+    #
+    # events.addEventListener('memory', (e) => {
+    #     updateMemoryChart(JSON.parse(e.data));
+    # });
+    #
+    # events.addEventListener('alert', (e) => {
+    #     showAlert(JSON.parse(e.data));
+    # });
+    #
+    # events.addEventListener('connected', (e) => {
+    #     console.log('Connected at', JSON.parse(e.data).server_time);
+    # });
+
+=head2 Channel Subscription Patterns
+
+Organize event streams with channel-based subscriptions:
+
+    # Pattern 1: User-specific notifications
+    $app->sse('/notifications' => sub ($sse) {
+        my $user_id = get_user_from_session($sse);
+
+        $sse->subscribe("user:$user_id:notifications");
+        $sse->subscribe("broadcast:all");
+
+        $sse->on(close => sub {
+            # Automatic unsubscribe happens via unsubscribe_all
+        });
+    });
+
+    # Pattern 2: Topic-based subscriptions
+    $app->sse('/news/:category' => sub ($sse) {
+        my $category = $sse->path_params->{category};
+
+        $sse->subscribe("news:$category");
+        $sse->subscribe("news:breaking");  # Always get breaking news
+    });
+
+    # Pattern 3: Dynamic subscription via query params
+    $app->sse('/events' => sub ($sse) {
+        my $topics = $sse->scope->{query_string} // '';
+        my @subscriptions;
+
+        for my $param (split /&/, $topics) {
+            my ($key, $value) = split /=/, $param;
+            if ($key eq 'topic') {
+                push @subscriptions, $value;
+                $sse->subscribe("topic:$value");
+            }
+        }
+
+        $sse->send_event(
+            data => { subscribed => \@subscriptions },
+            event => 'subscribed',
+        );
+    });
+
+=head2 Live Activity Feed
+
+A complete activity feed implementation:
+
+    $app->sse('/activity/:project_id' => sub ($sse) {
+        my $project_id = $sse->path_params->{project_id};
+        my $channel = "project:$project_id:activity";
+
+        # Send initial connection event
+        $sse->send_event(
+            event => 'connected',
+            data  => {
+                project_id => $project_id,
+                connected_at => time(),
+            },
+        );
+
+        # Subscribe to project activity
+        $sse->subscribe($channel, sub ($activity) {
+            $sse->send_event(
+                event => $activity->{type},
+                data  => $activity,
+                id    => $activity->{id},
+            );
+        });
+
+        $sse->on(close => sub {
+            # Log user disconnection for analytics
+        });
+    });
+
+    # Publishing activity from elsewhere in your app
+    $app->post('/projects/:id/tasks' => sub ($c) {
+        my $project_id = $c->path_params->{id};
+        my $task = create_task($c->req->json_body->get);
+
+        # Notify all SSE subscribers
+        my $pubsub = PAGI::Simple::PubSub->instance;
+        $pubsub->publish("project:$project_id:activity", {
+            id        => generate_id(),
+            type      => 'task_created',
+            task      => $task,
+            user      => get_current_user($c),
+            timestamp => time(),
+        });
+
+        $c->status(201)->json($task);
+    });
+
+=head1 SSE FORMAT REFERENCE
+
+The SSE protocol uses a simple text format:
+
+    event: eventname
+    id: 123
+    retry: 5000
+    data: {"key": "value"}
+
+=over 4
+
+=item * B<data> - The message content (required). Multi-line data sends multiple C<data:> lines.
+
+=item * B<event> - Event type name. Client can listen with C<addEventListener('eventname', ...)>.
+
+=item * B<id> - Event identifier. Sent as C<Last-Event-ID> header on reconnection.
+
+=item * B<retry> - Reconnection delay in milliseconds.
+
+=back
+
+    # All these are valid:
+    $sse->send_event(data => 'Simple text');
+
+    $sse->send_event(
+        data  => { complex => 'object' },  # Auto-encoded to JSON
+        event => 'update',
+    );
+
+    $sse->send_event(
+        data  => 'Important message',
+        id    => '12345',
+        event => 'notification',
+        retry => 10000,
+    );
+
+=head1 BROWSER COMPATIBILITY
+
+SSE is supported in all modern browsers except IE. For IE support,
+consider a polyfill or fall back to polling.
+
+    # Client-side with fallback:
+    # if (typeof EventSource !== 'undefined') {
+    #     const events = new EventSource('/stream');
+    #     events.onmessage = (e) => handleMessage(e.data);
+    # } else {
+    #     // Fall back to polling
+    #     setInterval(() => fetch('/poll').then(r => r.json()).then(handleMessage), 5000);
+    # }
+
 =head1 METHODS
 
 =cut

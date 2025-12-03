@@ -61,6 +61,237 @@ API for building web applications with support for:
 
 =back
 
+=head1 FEATURE OVERVIEW
+
+    Feature              Description                          See Also
+    ─────────────────────────────────────────────────────────────────────
+    Routing              GET, POST, PUT, DELETE, PATCH        get(), post(), etc.
+    Path Parameters      /users/:id, /files/*path             path_params
+    Route Groups         Prefix & middleware inheritance       group()
+    Named Routes         URL generation from route names       name(), url_for()
+    Mounting             Sub-application composition           mount()
+
+    Middleware           Before/after request processing       middleware(), use()
+    Hooks                Lifecycle events                      before(), after()
+    Error Handlers       Custom error pages                    error()
+
+    Cookies              Read/write with attributes            cookie(), req->cookie()
+    Content Negotiation  Accept header parsing                 accepts(), respond_to()
+    File Uploads         Multipart form handling               upload(), uploads()
+    Streaming            Chunked responses                     stream(), send_file()
+    CORS                 Cross-origin requests                 cors(), use_cors()
+    Logging              Request logging                       enable_logging()
+
+    WebSocket            Real-time bidirectional               websocket()
+    SSE                  Server-sent events                    sse()
+    PubSub               In-memory message passing             PubSub->instance
+
+=head1 GETTING STARTED
+
+=head2 Creating Your First App
+
+    #!/usr/bin/env perl
+    use PAGI::Simple;
+
+    my $app = PAGI::Simple->new;
+
+    # Simple text response
+    $app->get('/' => sub ($c) {
+        $c->text('Hello, World!');
+    });
+
+    # JSON API endpoint
+    $app->get('/api/status' => sub ($c) {
+        $c->json({ status => 'ok', version => '1.0' });
+    });
+
+    # Path parameters
+    $app->get('/users/:id' => sub ($c) {
+        my $id = $c->path_params->{id};
+        $c->json({ user_id => $id });
+    });
+
+    # POST with JSON body
+    $app->post('/users' => sub ($c) {
+        my $data = $c->req->json_body->get;
+        # Create user...
+        $c->status(201)->json({ created => 1 });
+    });
+
+    $app->to_app;
+
+Run with: C<pagi-server --port 3000 app.pl>
+
+=head2 Adding Middleware
+
+    # Define reusable middleware
+    $app->middleware(auth => sub ($c, $next) {
+        my $token = $c->req->header('Authorization');
+        if (valid_token($token)) {
+            $c->stash->{user} = get_user($token);
+            return $next->();
+        }
+        $c->status(401)->json({ error => 'Unauthorized' });
+    });
+
+    # Apply to specific routes
+    $app->get('/profile' => [qw(auth)] => sub ($c) {
+        $c->json({ user => $c->stash->{user} });
+    });
+
+=head2 Route Groups
+
+    $app->group('/api' => sub ($app) {
+        $app->group('/v1' => [qw(auth)] => sub ($app) {
+            $app->get('/users' => sub ($c) { ... });
+            $app->post('/users' => sub ($c) { ... });
+        });
+    });
+
+=head2 WebSocket Support
+
+    $app->websocket('/chat' => sub ($ws) {
+        $ws->join('chat:lobby');
+
+        $ws->on(message => sub ($data) {
+            $ws->broadcast('chat:lobby', $data);
+        });
+    });
+
+=head2 Server-Sent Events
+
+    $app->sse('/notifications' => sub ($sse) {
+        $sse->subscribe('user:notifications');
+    });
+
+=head1 COMPARISON WITH RAW PAGI
+
+PAGI::Simple provides a higher-level abstraction over raw PAGI:
+
+    ┌─────────────────────────────────────────────────────────────────┐
+    │ Raw PAGI                        │ PAGI::Simple                  │
+    ├─────────────────────────────────┼───────────────────────────────┤
+    │ Manual scope parsing            │ $c->req->path, params, etc.   │
+    │ Manual response building        │ $c->json(), $c->html()        │
+    │ Manual header management        │ $c->header(), $c->status()    │
+    │ No routing                      │ Built-in router with params   │
+    │ Manual WebSocket protocol       │ $ws->on(), $ws->send()        │
+    │ Manual SSE formatting           │ $sse->send_event()            │
+    │ No middleware                   │ Composable middleware chain   │
+    └─────────────────────────────────┴───────────────────────────────┘
+
+Raw PAGI example:
+
+    sub ($scope, $receive, $send) {
+        my $path = $scope->{path};
+        my $method = $scope->{method};
+
+        await $send->({
+            type => 'http.response.start',
+            status => 200,
+            headers => [['content-type', 'application/json']],
+        });
+        await $send->({
+            type => 'http.response.body',
+            body => '{"message":"hello"}',
+        });
+    }
+
+PAGI::Simple equivalent:
+
+    $app->get('/' => sub ($c) {
+        $c->json({ message => 'hello' });
+    });
+
+=head1 MIGRATING FROM OTHER FRAMEWORKS
+
+=head2 From Mojolicious
+
+    # Mojolicious                       # PAGI::Simple
+    get '/' => sub ($c) {               $app->get('/' => sub ($c) {
+        $c->render(text => 'Hi');           $c->text('Hi');
+    };                                  });
+
+    get '/user/:id' => sub ($c) {       $app->get('/user/:id' => sub ($c) {
+        my $id = $c->param('id');           my $id = $c->path_params->{id};
+        $c->render(json => {...});          $c->json({...});
+    };                                  });
+
+=head2 From Dancer2
+
+    # Dancer2                           # PAGI::Simple
+    get '/' => sub {                    $app->get('/' => sub ($c) {
+        return 'Hello';                     $c->text('Hello');
+    };                                  });
+
+    post '/user' => sub {               $app->post('/user' => sub ($c) {
+        my $data = decode_json(             my $data = $c->req->json_body->get;
+            request->body);                 $c->json({...});
+        return to_json({...});          });
+    };
+
+=head2 From Plack/PSGI
+
+PAGI is conceptually similar to PSGI but async-native. Main differences:
+
+=over 4
+
+=item * PAGI uses async/await instead of callbacks
+
+=item * Responses are sent via the C<send> coderef, not returned
+
+=item * WebSocket and SSE are first-class citizens
+
+=back
+
+=head1 PERFORMANCE CONSIDERATIONS
+
+=head2 Async/Await
+
+PAGI::Simple uses L<Future::AsyncAwait> for async operations. Database
+queries, HTTP clients, and I/O should use async-compatible libraries:
+
+    # Good: Non-blocking database query
+    $app->get('/users' => sub ($c) {
+        my $users = await $db->query('SELECT * FROM users');
+        $c->json($users);
+    });
+
+    # Avoid: Blocking operations
+    # These block the entire event loop
+    $app->get('/slow' => sub ($c) {
+        my $result = LWP::UserAgent->new->get($url);  # BLOCKING!
+        $c->json($result);
+    });
+
+=head2 Memory Usage
+
+=over 4
+
+=item * Use C<< $c->stream() >> for large responses instead of buffering
+
+=item * Use C<< $c->send_file() >> for file downloads
+
+=item * File uploads spool to disk above 64KB by default
+
+=item * WebSocket/SSE connections consume memory per connection
+
+=back
+
+=head2 Connection Limits
+
+Each WebSocket and SSE connection holds resources. For high-concurrency:
+
+=over 4
+
+=item * Monitor connection counts per channel
+
+=item * Implement connection timeouts
+
+=item * Consider external message brokers for multi-process scaling
+
+=back
+
 =head1 METHODS
 
 =cut
@@ -94,6 +325,7 @@ sub new ($class, %args) {
         _startup_hooks   => [],
         _shutdown_hooks  => [],
         _static_handlers => [],           # Static file handlers [(prefix, app), ...]
+        _mounted_apps    => [],           # Mounted sub-applications [(prefix, app, middleware), ...]
         _prefix          => '',           # Current route group prefix
         _group_middleware => [],          # Current group middleware stack
     }, $class;
@@ -161,14 +393,23 @@ async sub _handle_request ($self, $scope, $receive, $send) {
     if ($type eq 'lifespan') {
         await $self->_handle_lifespan($scope, $receive, $send);
     }
-    elsif ($type eq 'http') {
-        await $self->_handle_http($scope, $receive, $send);
-    }
-    elsif ($type eq 'websocket') {
-        await $self->_handle_websocket($scope, $receive, $send);
-    }
-    elsif ($type eq 'sse') {
-        await $self->_handle_sse($scope, $receive, $send);
+    elsif ($type eq 'http' || $type eq 'websocket' || $type eq 'sse') {
+        # Check mounted apps first - they take precedence
+        if (@{$self->{_mounted_apps}}) {
+            my $dispatched = await $self->_dispatch_to_mounted($scope, $receive, $send);
+            return if $dispatched;
+        }
+
+        # No mount matched, handle with normal routing
+        if ($type eq 'http') {
+            await $self->_handle_http($scope, $receive, $send);
+        }
+        elsif ($type eq 'websocket') {
+            await $self->_handle_websocket($scope, $receive, $send);
+        }
+        else {  # sse
+            await $self->_handle_sse($scope, $receive, $send);
+        }
     }
     else {
         die "Unsupported scope type: $type";
@@ -208,10 +449,28 @@ async sub _handle_lifespan ($self, $scope, $receive, $send) {
     }
 }
 
+# Internal: Get a header value from scope
+sub _get_header_from_scope ($scope, $name) {
+    $name = lc($name);
+    for my $h (@{$scope->{headers} // []}) {
+        return $h->[1] if lc($h->[0]) eq $name;
+    }
+    return;
+}
+
 # Internal: Handle HTTP requests
 async sub _handle_http ($self, $scope, $receive, $send) {
     my $method = $scope->{method} // 'GET';
     my $path   = $scope->{path} // '/';
+
+    # Handle CORS preflight OPTIONS requests before routing
+    if ($method eq 'OPTIONS' && $self->{_cors}) {
+        my $origin = _get_header_from_scope($scope, 'origin');
+        if ($origin) {
+            my $handled = await $self->_handle_cors_preflight($scope, $send, $origin);
+            return if $handled;
+        }
+    }
 
     # Try to match a route first
     my $match = $self->{router}->match($method, $path);
@@ -571,6 +830,238 @@ sub hook ($self, $type, $callback) {
     return $self;
 }
 
+=head2 enable_logging
+
+    # Basic usage - combined format to STDERR
+    $app->enable_logging;
+
+    # Custom format
+    $app->enable_logging(format => 'json');
+
+    # Full configuration
+    $app->enable_logging(
+        format => 'combined',    # or 'common', 'tiny', 'json', or custom
+        output => \*STDERR,      # or filename, or coderef
+        skip   => ['/health', '/metrics'],  # paths to skip
+    );
+
+Enable request logging with configurable format and output.
+
+Supported formats:
+
+=over 4
+
+=item * combined - Apache/nginx combined log format (default)
+
+=item * common - Apache common log format
+
+=item * tiny - Minimal format (method, path, status, time)
+
+=item * json - Structured JSON for log aggregation
+
+=item * Custom format string with specifiers like C<%h>, C<%t>, C<%r>, C<%\>s>, etc.
+
+=back
+
+Returns $app for chaining.
+
+See L<PAGI::Simple::Logger> for format specifier reference.
+
+=cut
+
+sub enable_logging ($self, %opts) {
+    require PAGI::Simple::Logger;
+    require Time::HiRes;
+
+    my $logger = PAGI::Simple::Logger->new(%opts);
+
+    # Before hook: record start time
+    $self->hook(before => sub ($c) {
+        $c->{_request_start} = Time::HiRes::time();
+    });
+
+    # After hook: log the request
+    $self->hook(after => sub ($c) {
+        my $duration = defined $c->{_request_start}
+            ? Time::HiRes::time() - $c->{_request_start}
+            : 0;
+
+        $logger->log(
+            scope            => $c->scope,
+            status           => $c->response_status,
+            response_size    => $c->response_size,
+            duration         => $duration,
+            response_headers => $c->response_headers,
+        );
+    });
+
+    return $self;
+}
+
+=head2 use_cors
+
+    # Allow all origins
+    $app->use_cors;
+
+    # Specific origins
+    $app->use_cors(
+        origins     => ['https://app.example.com', 'https://admin.example.com'],
+        methods     => [qw(GET POST PUT DELETE)],
+        headers     => [qw(Content-Type Authorization X-Request-ID)],
+        credentials => 1,
+        max_age     => 86400,
+    );
+
+Enable CORS handling for the application. This automatically:
+
+=over 4
+
+=item * Responds to OPTIONS preflight requests
+
+=item * Adds CORS headers to all responses
+
+=item * Validates origins if a whitelist is provided
+
+=back
+
+Options:
+
+=over 4
+
+=item * origins - Arrayref of allowed origins, or ['*'] for any. Default: ['*']
+
+=item * methods - Arrayref of allowed methods. Default: GET,POST,PUT,DELETE,PATCH,OPTIONS
+
+=item * headers - Arrayref of allowed request headers. Default: Content-Type,Authorization,X-Requested-With
+
+=item * expose - Arrayref of response headers to expose to client
+
+=item * credentials - Boolean, allow credentials. Default: 0
+
+=item * max_age - Preflight cache time in seconds. Default: 86400
+
+=back
+
+Returns $app for chaining.
+
+=cut
+
+sub use_cors ($self, %opts) {
+    my $origins = $opts{origins} // ['*'];
+    my $methods = $opts{methods} // [qw(GET POST PUT DELETE PATCH OPTIONS)];
+    my $headers = $opts{headers} // [qw(Content-Type Authorization X-Requested-With)];
+    my $expose = $opts{expose} // [];
+    my $credentials = $opts{credentials} // 0;
+    my $max_age = $opts{max_age} // 86400;
+
+    # Store CORS config - this is checked in _handle_http for preflight
+    $self->{_cors} = {
+        origins     => { map { $_ => 1 } @$origins },
+        has_wildcard => (grep { $_ eq '*' } @$origins) ? 1 : 0,
+        methods     => $methods,
+        headers     => $headers,
+        expose      => $expose,
+        credentials => $credentials,
+        max_age     => $max_age,
+    };
+
+    # Before hook: add CORS headers for matched routes
+    $self->hook(before => sub ($c) {
+        my $method = $c->method;
+        my $origin = $c->req->header('origin');
+
+        return unless $origin;  # Not a CORS request
+
+        my $cors = $self->{_cors};
+
+        # Check if origin is allowed
+        my $origin_allowed = $cors->{has_wildcard} || $cors->{origins}{$origin};
+        return unless $origin_allowed;
+
+        # Determine what to send as Allow-Origin
+        my $allow_origin;
+        if ($cors->{has_wildcard} && !$cors->{credentials}) {
+            $allow_origin = '*';
+        } else {
+            $allow_origin = $origin;
+        }
+
+        # Handle preflight (for routes that explicitly match OPTIONS)
+        if ($method eq 'OPTIONS') {
+            $c->res_header('Access-Control-Allow-Origin', $allow_origin);
+            $c->res_header('Access-Control-Allow-Methods', join(', ', @{$cors->{methods}}));
+            $c->res_header('Access-Control-Allow-Headers', join(', ', @{$cors->{headers}}));
+            $c->res_header('Access-Control-Max-Age', $cors->{max_age});
+            $c->res_header('Vary', 'Origin');
+
+            if ($cors->{credentials}) {
+                $c->res_header('Access-Control-Allow-Credentials', 'true');
+            }
+
+            # Send 204 No Content for preflight
+            $c->status(204)->send_response('');
+            return;  # Stop processing
+        }
+
+        # For regular requests, add CORS headers
+        $c->res_header('Access-Control-Allow-Origin', $allow_origin);
+        $c->res_header('Vary', 'Origin');
+
+        if ($cors->{credentials}) {
+            $c->res_header('Access-Control-Allow-Credentials', 'true');
+        }
+
+        if (@{$cors->{expose}}) {
+            $c->res_header('Access-Control-Expose-Headers', join(', ', @{$cors->{expose}}));
+        }
+    });
+
+    return $self;
+}
+
+# Internal: Handle CORS preflight OPTIONS request
+async sub _handle_cors_preflight ($self, $scope, $send, $origin) {
+    my $cors = $self->{_cors};
+
+    # Check if origin is allowed
+    my $origin_allowed = $cors->{has_wildcard} || $cors->{origins}{$origin};
+    return 0 unless $origin_allowed;
+
+    # Determine what to send as Allow-Origin
+    my $allow_origin;
+    if ($cors->{has_wildcard} && !$cors->{credentials}) {
+        $allow_origin = '*';
+    } else {
+        $allow_origin = $origin;
+    }
+
+    my @headers = (
+        ['Access-Control-Allow-Origin', $allow_origin],
+        ['Access-Control-Allow-Methods', join(', ', @{$cors->{methods}})],
+        ['Access-Control-Allow-Headers', join(', ', @{$cors->{headers}})],
+        ['Access-Control-Max-Age', $cors->{max_age}],
+        ['Vary', 'Origin'],
+    );
+
+    if ($cors->{credentials}) {
+        push @headers, ['Access-Control-Allow-Credentials', 'true'];
+    }
+
+    await $send->({
+        type    => 'http.response.start',
+        status  => 204,
+        headers => \@headers,
+    });
+
+    await $send->({
+        type => 'http.response.body',
+        body => '',
+        more => 0,
+    });
+
+    return 1;  # Handled
+}
+
 =head2 middleware
 
     $app->middleware(auth => sub ($c, $next) {
@@ -632,13 +1123,12 @@ sub has_middleware ($self, $name) {
     $app->get('/protected' => [qw(auth)] => sub ($c) { ... });
 
 Register a GET route. Optionally specify middleware as an arrayref
-before the handler. Returns $app for chaining.
+before the handler. Returns a RouteHandle for chaining C<< ->name() >>.
 
 =cut
 
 sub get ($self, $path, @args) {
-    $self->_add_route('GET', $path, @args);
-    return $self;
+    return $self->_add_route('GET', $path, @args);
 }
 
 =head2 post
@@ -646,13 +1136,12 @@ sub get ($self, $path, @args) {
     $app->post('/users' => sub ($c) { ... });
     $app->post('/api/users' => [qw(auth json_only)] => sub ($c) { ... });
 
-Register a POST route. Returns $app for chaining.
+Register a POST route. Returns a RouteHandle for chaining C<< ->name() >>.
 
 =cut
 
 sub post ($self, $path, @args) {
-    $self->_add_route('POST', $path, @args);
-    return $self;
+    return $self->_add_route('POST', $path, @args);
 }
 
 =head2 put
@@ -660,13 +1149,12 @@ sub post ($self, $path, @args) {
     $app->put('/users/:id' => sub ($c) { ... });
     $app->put('/users/:id' => [qw(auth)] => sub ($c) { ... });
 
-Register a PUT route. Returns $app for chaining.
+Register a PUT route. Returns a RouteHandle for chaining C<< ->name() >>.
 
 =cut
 
 sub put ($self, $path, @args) {
-    $self->_add_route('PUT', $path, @args);
-    return $self;
+    return $self->_add_route('PUT', $path, @args);
 }
 
 =head2 del
@@ -675,13 +1163,12 @@ sub put ($self, $path, @args) {
     $app->del('/users/:id' => [qw(auth admin)] => sub ($c) { ... });
 
 Register a DELETE route. Named 'del' to avoid conflict with Perl's
-built-in delete. Returns $app for chaining.
+built-in delete. Returns a RouteHandle for chaining C<< ->name() >>.
 
 =cut
 
 sub del ($self, $path, @args) {
-    $self->_add_route('DELETE', $path, @args);
-    return $self;
+    return $self->_add_route('DELETE', $path, @args);
 }
 
 =head2 patch
@@ -689,13 +1176,12 @@ sub del ($self, $path, @args) {
     $app->patch('/users/:id' => sub ($c) { ... });
     $app->patch('/users/:id' => [qw(auth)] => sub ($c) { ... });
 
-Register a PATCH route. Returns $app for chaining.
+Register a PATCH route. Returns a RouteHandle for chaining C<< ->name() >>.
 
 =cut
 
 sub patch ($self, $path, @args) {
-    $self->_add_route('PATCH', $path, @args);
-    return $self;
+    return $self->_add_route('PATCH', $path, @args);
 }
 
 =head2 delete
@@ -703,13 +1189,12 @@ sub patch ($self, $path, @args) {
     $app->delete('/items/:id' => sub ($c) { ... });
     $app->delete('/items/:id' => [qw(auth)] => sub ($c) { ... });
 
-Register a DELETE route. Returns $app for chaining.
+Register a DELETE route. Returns a RouteHandle for chaining C<< ->name() >>.
 
 =cut
 
 sub delete ($self, $path, @args) {
-    $self->_add_route('DELETE', $path, @args);
-    return $self;
+    return $self->_add_route('DELETE', $path, @args);
 }
 
 =head2 any
@@ -718,13 +1203,12 @@ sub delete ($self, $path, @args) {
     $app->any('/protected' => [qw(auth)] => sub ($c) { ... });
 
 Register a route that matches any HTTP method.
-Returns $app for chaining.
+Returns a RouteHandle for chaining C<< ->name() >>.
 
 =cut
 
 sub any ($self, $path, @args) {
-    $self->_add_route('*', $path, @args);
-    return $self;
+    return $self->_add_route('*', $path, @args);
 }
 
 =head2 route
@@ -733,13 +1217,12 @@ sub any ($self, $path, @args) {
     $app->route('OPTIONS', '/resource' => [qw(cors)] => sub ($c) { ... });
 
 Register a route with an explicit HTTP method.
-Returns $app for chaining.
+Returns a RouteHandle for chaining C<< ->name() >>.
 
 =cut
 
 sub route ($self, $method, $path, @args) {
-    $self->_add_route($method, $path, @args);
-    return $self;
+    return $self->_add_route($method, $path, @args);
 }
 
 =head2 websocket
@@ -918,11 +1401,177 @@ sub group ($self, $prefix, @args) {
     return $self;
 }
 
-# Internal: Add a route with optional middleware
+=head2 mount
+
+    # Mount a PAGI::Simple sub-application under a prefix
+    my $api_v1 = PAGI::Simple->new(name => 'API v1');
+    $api_v1->get('/users' => sub ($c) { ... });
+
+    my $app = PAGI::Simple->new;
+    $app->mount('/api/v1' => $api_v1);  # /api/v1/users
+
+    # Mount with middleware
+    $app->mount('/admin' => $admin_app, [qw(auth admin_only)]);
+
+    # Mount a raw PAGI application (coderef)
+    $app->mount('/legacy' => $legacy_pagi_app);
+
+Mount a sub-application under a path prefix. The mounted app receives
+requests with the prefix stripped from the path. All HTTP methods,
+WebSocket connections, and SSE streams are properly routed.
+
+Options:
+
+=over 4
+
+=item * C<$prefix> - The path prefix to mount under (e.g., '/api/v1')
+
+=item * C<$sub_app> - A PAGI::Simple instance or PAGI app coderef
+
+=item * C<@middleware> - Optional arrayref of middleware names to apply
+
+=back
+
+The mounted app has access to C<< $c->mount_path >> (the mount prefix)
+and C<< $c->local_path >> (the path without the prefix).
+
+Returns C<$app> for chaining.
+
+=cut
+
+sub mount ($self, $prefix, $sub_app, @args) {
+    my $middleware = [];
+
+    # Check if middleware was passed
+    if (@args == 1 && ref($args[0]) eq 'ARRAY') {
+        $middleware = $args[0];
+    }
+    elsif (@args) {
+        die 'Invalid mount arguments: expected (prefix, app) or (prefix, app, \@middleware)';
+    }
+
+    # Normalize prefix - ensure it starts with / and doesn't end with /
+    $prefix =~ s{/$}{};  # Remove trailing slash
+    $prefix = "/$prefix" unless $prefix =~ m{^/};
+
+    # Get the PAGI app from the sub-application
+    my $app;
+    if (blessed($sub_app) && $sub_app->can('to_app')) {
+        # It's a PAGI::Simple (or similar) - get its to_app
+        $app = $sub_app;
+    }
+    elsif (ref($sub_app) eq 'CODE') {
+        # It's already a raw PAGI app (coderef)
+        $app = $sub_app;
+    }
+    else {
+        die 'mount() requires a PAGI::Simple app or a PAGI app coderef';
+    }
+
+    # Store the mounted app
+    push @{$self->{_mounted_apps}}, {
+        prefix     => $prefix,
+        app        => $app,
+        middleware => $middleware,
+    };
+
+    return $self;
+}
+
+# Internal: Check if a path matches any mounted app and dispatch to it
+# Returns 1 if dispatched, 0 if no mount matched
+async sub _dispatch_to_mounted ($self, $scope, $receive, $send) {
+    my $path = $scope->{path} // '/';
+    my $type = $scope->{type} // '';
+
+    for my $mount (@{$self->{_mounted_apps}}) {
+        my $prefix = $mount->{prefix};
+
+        # Check if path matches this mount
+        # Path must equal prefix exactly or start with prefix followed by /
+        if ($path eq $prefix || $path =~ m{^\Q$prefix\E/}) {
+            # Strip the prefix from the path
+            my $local_path = $path;
+            $local_path =~ s{^\Q$prefix\E}{};
+            $local_path = '/' unless length($local_path);
+
+            # Create a modified scope with the adjusted path
+            my $sub_scope = {
+                %$scope,
+                path        => $local_path,
+                _mount_path => $prefix,           # Store mount path for context
+                _full_path  => $path,             # Store original full path
+            };
+
+            # Get the actual PAGI app
+            my $app = $mount->{app};
+            if (blessed($app) && $app->can('to_app')) {
+                $app = $app->to_app;
+            }
+
+            # If there's middleware, we need to create a context and run the chain
+            if (@{$mount->{middleware}} && $type eq 'http') {
+                # Create a wrapper that runs middleware then calls mounted app
+                await $self->_dispatch_mounted_with_middleware(
+                    $sub_scope, $receive, $send,
+                    $app, $mount->{middleware}
+                );
+            }
+            else {
+                # No middleware - call mounted app directly
+                await $app->($sub_scope, $receive, $send);
+            }
+
+            return 1;  # Dispatched to mount
+        }
+    }
+
+    return 0;  # No mount matched
+}
+
+# Internal: Dispatch to mounted app with middleware chain
+async sub _dispatch_mounted_with_middleware ($self, $scope, $receive, $send, $app, $middleware_names) {
+    # Create a context for running middleware
+    my $c = PAGI::Simple::Context->new(
+        app     => $self,
+        scope   => $scope,
+        receive => $receive,
+        send    => $send,
+    );
+
+    # Build middleware chain with mounted app as the final handler
+    my $final_handler = async sub {
+        await $app->($scope, $receive, $send);
+    };
+
+    my $chain = $final_handler;
+
+    # Wrap each middleware around the chain, in reverse order
+    for my $name (reverse @$middleware_names) {
+        my $mw = $self->get_middleware($name);
+        unless ($mw) {
+            die "Unknown middleware: $name";
+        }
+
+        my $next = $chain;
+        $chain = async sub {
+            my $result = $mw->($c, $next);
+            if (blessed($result) && $result->can('get')) {
+                await $result;
+            }
+        };
+    }
+
+    # Execute the chain
+    await $chain->();
+}
+
+# Internal: Add a route with optional middleware and name
 # Args can be: ($handler) or ($middleware_arrayref, $handler)
 # Applies current group prefix and middleware
+# Returns a RouteHandle for chained naming
 sub _add_route ($self, $method, $path, @args) {
-    my ($route_middleware, $handler);
+    my ($route_middleware, $handler, $name);
 
     if (@args == 1) {
         # No middleware: ($handler)
@@ -944,8 +1593,78 @@ sub _add_route ($self, $method, $path, @args) {
     # Combine group middleware + route middleware
     my @combined_middleware = (@{$self->{_group_middleware}}, @$route_middleware);
 
-    $self->{router}->add($method, $full_path, $handler, middleware => \@combined_middleware);
+    my $route = $self->{router}->add($method, $full_path, $handler, middleware => \@combined_middleware);
+
+    # Return a handle that allows chaining ->name() but still returns to $app
+    return PAGI::Simple::RouteHandle->new($self, $route);
 }
+
+=head2 url_for
+
+    my $url = $app->url_for('user_show', id => 42);
+    my $url = $app->url_for('search', query => { q => 'perl', page => 1 });
+
+Generate a URL for a named route with the given parameters.
+
+Path parameters (like C<:id>) are substituted into the route pattern.
+Extra parameters or a C<query> hashref are appended as query string.
+
+Returns undef if the route is not found or required parameters are missing.
+
+=cut
+
+sub url_for ($self, $name, %params) {
+    return $self->{router}->url_for($name, %params);
+}
+
+=head2 named_routes
+
+    my @names = $app->named_routes;
+
+Returns a list of all registered route names.
+
+=cut
+
+sub named_routes ($self) {
+    return $self->{router}->named_routes;
+}
+
+#---------------------------------------------------------------------------
+# PAGI::Simple::RouteHandle - Enables chained route naming
+#---------------------------------------------------------------------------
+package PAGI::Simple::RouteHandle;
+
+use strict;
+use warnings;
+use experimental 'signatures';
+
+sub new ($class, $app, $route) {
+    return bless { app => $app, route => $route }, $class;
+}
+
+=head2 name
+
+    $app->get('/users/:id' => sub {...})->name('user_show');
+
+Assign a name to the route for URL generation.
+
+=cut
+
+sub name ($self, $name) {
+    $self->{route}{name} = $name;
+    $self->{app}{router}->register_name($name, $self->{route});
+    return $self->{app};  # Return app for continued chaining
+}
+
+# Allow continued route registration by delegating to app
+sub get ($self, @args) { return $self->{app}->get(@args); }
+sub post ($self, @args) { return $self->{app}->post(@args); }
+sub put ($self, @args) { return $self->{app}->put(@args); }
+sub patch ($self, @args) { return $self->{app}->patch(@args); }
+sub delete ($self, @args) { return $self->{app}->delete(@args); }
+sub any ($self, @args) { return $self->{app}->any(@args); }
+
+package PAGI::Simple;
 
 =head1 SEE ALSO
 

@@ -169,8 +169,10 @@ subtest 'PAGI::Simple routing methods' => sub {
 subtest 'PAGI::Simple route registration' => sub {
     my $app = PAGI::Simple->new;
 
+    # Route methods now return RouteHandle for ->name() chaining, but
+    # RouteHandle also delegates route methods to app for continued chaining
     my $result = $app->get('/' => sub { });
-    is($result, $app, 'get returns $app for chaining');
+    ok($result->can('get'), 'get returns chainable object');
 
     $app->post('/users' => sub { });
     $app->put('/users' => sub { });

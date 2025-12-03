@@ -34,6 +34,307 @@ PAGI::Simple::WebSocket provides a context object for handling WebSocket
 connections. It wraps the low-level PAGI WebSocket protocol with a
 convenient callback-based API.
 
+=head1 COMPLETE EXAMPLES
+
+=head2 Room-Based Chat Application
+
+A full-featured chat room implementation with user management:
+
+    $app->websocket('/chat/:room' => sub ($ws) {
+        my $room = $ws->path_params->{room};
+        my $channel = "chat:room:$room";
+        my $user = { name => 'Guest_' . int(rand(10000)) };
+
+        # Join the chat room
+        $ws->join($channel);
+
+        # Notify others of new user
+        $ws->broadcast_others($channel, {
+            type => 'user_joined',
+            user => $user->{name},
+            timestamp => time(),
+        });
+
+        # Handle incoming messages
+        $ws->on(message => sub ($data) {
+            my $msg;
+            eval { $msg = decode_json($data) };
+            return if $@;  # Invalid JSON
+
+            if ($msg->{type} eq 'set_name') {
+                my $old_name = $user->{name};
+                $user->{name} = $msg->{name} =~ s/[^\w\s-]//gr;  # Sanitize
+                $ws->broadcast($channel, {
+                    type => 'name_changed',
+                    old_name => $old_name,
+                    new_name => $user->{name},
+                });
+            }
+            elsif ($msg->{type} eq 'message') {
+                $ws->broadcast($channel, {
+                    type => 'message',
+                    user => $user->{name},
+                    text => $msg->{text},
+                    timestamp => time(),
+                });
+            }
+            elsif ($msg->{type} eq 'typing') {
+                $ws->broadcast_others($channel, {
+                    type => 'typing',
+                    user => $user->{name},
+                });
+            }
+        });
+
+        # Handle disconnection
+        $ws->on(close => sub {
+            $ws->broadcast_others($channel, {
+                type => 'user_left',
+                user => $user->{name},
+                timestamp => time(),
+            });
+        });
+
+        # Send welcome message
+        $ws->send(encode_json({
+            type => 'welcome',
+            room => $room,
+            your_name => $user->{name},
+        }));
+    });
+
+=head2 Binary Message Handling
+
+WebSocket supports both text and binary frames. Use binary for
+images, files, or any non-text data:
+
+    $app->websocket('/upload' => sub ($ws) {
+        my $file_buffer = '';
+        my $file_meta = {};
+
+        $ws->on(message => sub ($data) {
+            # Check if it looks like JSON (text message with metadata)
+            if ($data =~ /^\{/) {
+                my $meta = decode_json($data);
+                if ($meta->{type} eq 'file_start') {
+                    $file_buffer = '';
+                    $file_meta = {
+                        name => $meta->{name},
+                        size => $meta->{size},
+                        type => $meta->{mime_type},
+                    };
+                    $ws->send('{"status":"ready"}');
+                }
+                elsif ($meta->{type} eq 'file_complete') {
+                    # Process the complete file
+                    save_file($file_meta->{name}, $file_buffer);
+                    $ws->send('{"status":"saved"}');
+                }
+            }
+            else {
+                # Binary data - append to buffer
+                $file_buffer .= $data;
+            }
+        });
+    });
+
+    # Sending binary data to client
+    $app->websocket('/download/:file' => sub ($ws) {
+        my $file = $ws->path_params->{file};
+
+        # Send file metadata first
+        $ws->send(encode_json({
+            type => 'file_meta',
+            name => $file,
+            size => -s "/files/$file",
+        }));
+
+        # Send file contents as binary
+        open my $fh, '<:raw', "/files/$file" or return;
+        while (read($fh, my $chunk, 65536)) {
+            $ws->send($chunk, binary => 1);
+        }
+        close $fh;
+
+        $ws->send('{"type":"complete"}');
+    });
+
+=head2 Error Handling Patterns
+
+Robust error handling for production applications:
+
+    $app->websocket('/api' => sub ($ws) {
+        # Register error handler first
+        $ws->on(error => sub ($error) {
+            warn "WebSocket error for client: $error";
+
+            # Try to notify client if connection is still open
+            unless ($ws->is_closed) {
+                $ws->send(encode_json({
+                    type => 'error',
+                    message => 'An error occurred processing your request',
+                }));
+            }
+        });
+
+        $ws->on(message => sub ($data) {
+            my $request;
+            eval {
+                $request = decode_json($data);
+            };
+            if ($@) {
+                $ws->send(encode_json({
+                    type => 'error',
+                    message => 'Invalid JSON',
+                }));
+                return;
+            }
+
+            # Wrap business logic in eval
+            eval {
+                my $result = process_request($request);
+                $ws->send(encode_json({
+                    type => 'response',
+                    id => $request->{id},
+                    data => $result,
+                }));
+            };
+            if ($@) {
+                $ws->send(encode_json({
+                    type => 'error',
+                    id => $request->{id},
+                    message => "Processing failed: $@",
+                }));
+            }
+        });
+    });
+
+=head2 Heartbeat/Keepalive Pattern
+
+Detect stale connections and keep proxies from closing idle connections:
+
+    $app->websocket('/realtime' => sub ($ws) {
+        my $last_pong = time();
+        my $ping_interval = 30;  # seconds
+        my $timeout = 90;  # seconds without pong = dead
+
+        # Note: This is a conceptual example. In practice, you'd
+        # integrate with an event loop timer (e.g., IO::Async timer)
+
+        # Client should send pong responses
+        $ws->on(message => sub ($data) {
+            my $msg = eval { decode_json($data) };
+            return unless $msg;
+
+            if ($msg->{type} eq 'pong') {
+                $last_pong = time();
+                return;
+            }
+
+            # Handle other message types...
+        });
+
+        # Check for stale connection periodically
+        # (integrate with your event loop)
+        my $check_alive = sub {
+            if (time() - $last_pong > $timeout) {
+                warn "WebSocket client timed out";
+                $ws->close(4000, "Connection timeout");
+                return;
+            }
+
+            # Send ping
+            $ws->send(encode_json({ type => 'ping', time => time() }));
+        };
+
+        # ... set up timer to call $check_alive every $ping_interval
+    });
+
+=head2 Reconnection Strategy (Client-Side)
+
+While reconnection is handled client-side, your server should
+support stateless reconnection:
+
+    # JavaScript client example:
+    #
+    # class ReconnectingWebSocket {
+    #     constructor(url) {
+    #         this.url = url;
+    #         this.reconnectDelay = 1000;
+    #         this.maxDelay = 30000;
+    #         this.connect();
+    #     }
+    #
+    #     connect() {
+    #         this.ws = new WebSocket(this.url);
+    #         this.ws.onopen = () => {
+    #             this.reconnectDelay = 1000;  // Reset on success
+    #             this.onopen?.();
+    #         };
+    #         this.ws.onclose = () => {
+    #             setTimeout(() => this.connect(), this.reconnectDelay);
+    #             this.reconnectDelay = Math.min(
+    #                 this.reconnectDelay * 2,
+    #                 this.maxDelay
+    #             );
+    #         };
+    #     }
+    # }
+
+    # Server should handle reconnection gracefully:
+    $app->websocket('/stream/:session_id' => sub ($ws) {
+        my $session_id = $ws->path_params->{session_id};
+
+        # Restore session state if exists
+        my $session = get_session($session_id) // {
+            created => time(),
+            last_event_id => 0,
+        };
+
+        # Send any missed events since last connection
+        if ($session->{last_event_id}) {
+            my @missed = get_events_since($session->{last_event_id});
+            for my $event (@missed) {
+                $ws->send(encode_json($event));
+            }
+        }
+
+        $ws->on(message => sub ($data) {
+            my $msg = decode_json($data);
+            if ($msg->{type} eq 'ack') {
+                $session->{last_event_id} = $msg->{event_id};
+                save_session($session_id, $session);
+            }
+        });
+    });
+
+=head1 CLOSE CODES
+
+Standard WebSocket close codes you may encounter or use:
+
+=over 4
+
+=item * B<1000> - Normal closure
+
+=item * B<1001> - Going away (page navigation, server shutdown)
+
+=item * B<1002> - Protocol error
+
+=item * B<1003> - Unsupported data type
+
+=item * B<1008> - Policy violation
+
+=item * B<1011> - Unexpected condition (server error)
+
+=item * B<4000-4999> - Application-specific codes
+
+=back
+
+    # Examples
+    $ws->close(1000, "Goodbye");           # Normal close
+    $ws->close(1008, "Unauthorized");      # Policy violation
+    $ws->close(4001, "Invalid session");   # Custom app code
+
 =head1 METHODS
 
 =cut

@@ -9,6 +9,10 @@ our $VERSION = '0.01';
 use Hash::MultiValue;
 use Future::AsyncAwait;
 use JSON::MaybeXS ();
+use PAGI::Simple::CookieUtil;
+use PAGI::Simple::Negotiate;
+use PAGI::Simple::MultipartParser;
+use PAGI::Simple::Upload;
 
 my $json = JSON::MaybeXS->new(utf8 => 1, allow_nonref => 1);
 
@@ -63,6 +67,9 @@ sub new ($class, $scope, $receive = undef, $path_params = undef) {
         _body_read   => 0,      # Whether body has been drained
         _body_params => undef,  # Lazy-built Hash::MultiValue for form params
         _path_params => $path_params // {},
+        _cookies     => undef,  # Lazy-parsed cookie hashref
+        _multipart   => undef,  # Parsed multipart data { fields, uploads }
+        _multipart_parsed => 0, # Whether multipart has been parsed
     }, $class;
 
     return $self;
@@ -284,6 +291,87 @@ sub user_agent ($self) {
     return $self->header('user-agent') // '';
 }
 
+=head2 cookies
+
+    my $cookies = $req->cookies;  # { session => 'abc', theme => 'dark' }
+
+Returns a hashref of all cookies from the Cookie header.
+Cookie names and values are trimmed and unquoted.
+
+=cut
+
+sub cookies ($self) {
+    unless ($self->{_cookies}) {
+        my $header = $self->header('cookie') // '';
+        $self->{_cookies} = PAGI::Simple::CookieUtil::parse_cookie_header($header);
+    }
+    return $self->{_cookies};
+}
+
+=head2 cookie
+
+    my $value = $req->cookie('session_id');
+
+Returns a single cookie value by name.
+Returns undef if the cookie is not present.
+
+=cut
+
+sub cookie ($self, $name) {
+    return $self->cookies->{$name};
+}
+
+=head2 accepts
+
+    my @types = $req->accepts;  # Parsed Accept header
+    # Returns: (['text/html', 1], ['application/json', 0.9], ...)
+
+Returns the parsed Accept header as a list of arrayrefs containing
+[media_type, quality] sorted by preference (highest quality first).
+
+If no Accept header is present, returns a single entry for C<*/*>.
+
+=cut
+
+sub accepts ($self) {
+    my $accept = $self->header('accept');
+    return PAGI::Simple::Negotiate->parse_accept($accept);
+}
+
+=head2 accepts_type
+
+    if ($req->accepts_type('application/json')) { ... }
+    if ($req->accepts_type('json')) { ... }  # Shortcut
+
+Check if a specific content type is acceptable. Returns true if the
+type is acceptable based on the Accept header.
+
+Supports type shortcuts: html, json, xml, text, etc.
+
+=cut
+
+sub accepts_type ($self, $type) {
+    my $accept = $self->header('accept');
+    return PAGI::Simple::Negotiate->accepts_type($accept, $type);
+}
+
+=head2 preferred_type
+
+    my $best = $req->preferred_type('text/html', 'application/json');
+    my $best = $req->preferred_type('html', 'json');  # Shortcuts
+
+Given a list of supported content types, returns the one that best matches
+the client's Accept header preferences. Returns undef if none are acceptable.
+
+Supports type shortcuts: html, json, xml, text, etc.
+
+=cut
+
+sub preferred_type ($self, @types) {
+    my $accept = $self->header('accept');
+    return PAGI::Simple::Negotiate->best_match(\@types, $accept);
+}
+
 =head2 is_secure
 
     if ($req->is_secure) { ... }
@@ -502,9 +590,126 @@ async sub json_body_safe ($self) {
     return $data;
 }
 
+=head1 FILE UPLOAD METHODS
+
+=head2 upload
+
+    my $file = await $req->upload('avatar');
+
+    if ($file) {
+        my $filename = $file->filename;
+        my $content  = $file->slurp;
+        $file->move_to('/uploads/' . $file->basename);
+    }
+
+Returns a single L<PAGI::Simple::Upload> object for the given field name.
+If multiple files were uploaded with the same name, returns the first one.
+Returns undef if no file was uploaded for that field.
+
+=cut
+
+async sub upload ($self, $name) {
+    await $self->_parse_multipart;
+    my $uploads = $self->{_multipart}{uploads}{$name};
+    return $uploads && @$uploads ? $uploads->[0] : undef;
+}
+
+=head2 uploads
+
+    my $files = await $req->uploads('photos');
+
+    for my $file (@$files) {
+        $file->move_to("/uploads/" . $file->basename);
+    }
+
+Returns an arrayref of L<PAGI::Simple::Upload> objects for the given field name.
+Returns an empty arrayref if no files were uploaded for that field.
+
+=cut
+
+async sub uploads ($self, $name) {
+    await $self->_parse_multipart;
+    return $self->{_multipart}{uploads}{$name} // [];
+}
+
+=head2 uploads_all
+
+    my $all = await $req->uploads_all;
+
+    for my $name (keys %$all) {
+        for my $file (@{$all->{$name}}) {
+            print "Field: $name, File: " . $file->filename . "\n";
+        }
+    }
+
+Returns a hashref of all uploaded files. Keys are field names, values are
+arrayrefs of L<PAGI::Simple::Upload> objects.
+
+=cut
+
+async sub uploads_all ($self) {
+    await $self->_parse_multipart;
+    return $self->{_multipart}{uploads} // {};
+}
+
+=head2 has_uploads
+
+    if (await $req->has_uploads) { ... }
+
+Returns true if the request contains any file uploads.
+
+=cut
+
+async sub has_uploads ($self) {
+    await $self->_parse_multipart;
+    my $uploads = $self->{_multipart}{uploads};
+    return $uploads && keys %$uploads ? 1 : 0;
+}
+
+=head2 is_multipart
+
+    if ($req->is_multipart) { ... }
+
+Returns true if the request has a multipart/form-data content type.
+This is a synchronous method that just checks the Content-Type header.
+
+=cut
+
+sub is_multipart ($self) {
+    my $ct = $self->content_type;
+    return $ct =~ m{^multipart/form-data}i ? 1 : 0;
+}
+
+# Internal: Parse multipart body (lazy, cached)
+async sub _parse_multipart ($self) {
+    return if $self->{_multipart_parsed};
+    $self->{_multipart_parsed} = 1;
+
+    # Initialize with empty data
+    $self->{_multipart} = { fields => {}, uploads => {} };
+
+    # Check if this is multipart
+    my $ct = $self->content_type;
+    return unless $ct =~ m{^multipart/form-data}i;
+
+    # Get the body
+    my $body = await $self->body;
+    return unless length $body;
+
+    # Parse multipart
+    my $parser = PAGI::Simple::MultipartParser->new;
+    eval {
+        $self->{_multipart} = $parser->parse($ct, $body);
+    };
+    if ($@) {
+        warn "Multipart parse error: $@";
+        $self->{_multipart} = { fields => {}, uploads => {} };
+    }
+}
+
 =head1 SEE ALSO
 
-L<PAGI::Simple>, L<PAGI::Simple::Context>, L<Hash::MultiValue>
+L<PAGI::Simple>, L<PAGI::Simple::Context>, L<PAGI::Simple::Upload>, L<Hash::MultiValue>
 
 =head1 AUTHOR
 

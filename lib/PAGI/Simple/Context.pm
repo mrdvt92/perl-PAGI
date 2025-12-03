@@ -8,8 +8,13 @@ our $VERSION = '0.01';
 
 use Future::AsyncAwait;
 use Hash::MultiValue;
+use Scalar::Util qw(blessed);
 use PAGI::Simple::Request;
 use PAGI::Simple::Response;
+use PAGI::Simple::CookieUtil;
+use PAGI::Simple::Negotiate;
+use PAGI::Simple::StreamWriter;
+use File::Basename ();
 
 =head1 NAME
 
@@ -67,6 +72,8 @@ sub new ($class, %args) {
         _status  => 200,    # Response status code
         _headers => [],     # Response headers (array of pairs)
         _path_params => $args{path_params} // {},
+        _response_size => 0,    # Track response body size
+        _request_start => undef, # For timing (set by logging)
     }, $class;
 
     return $self;
@@ -123,6 +130,52 @@ Returns the raw PAGI send coderef. Use for low-level response control.
 
 sub send ($self) {
     return $self->{send};
+}
+
+=head2 mount_path
+
+    my $prefix = $c->mount_path;  # e.g., '/api/v1'
+
+Returns the mount path prefix if this request was dispatched through a
+mounted sub-application. Returns an empty string if not mounted.
+
+This is useful for generating absolute URLs that include the mount prefix.
+
+=cut
+
+sub mount_path ($self) {
+    return $self->{scope}{_mount_path} // '';
+}
+
+=head2 local_path
+
+    my $path = $c->local_path;  # e.g., '/users/123'
+
+Returns the request path relative to the mount point. If the app is mounted
+at C</api/v1> and the full request path is C</api/v1/users/123>, this
+returns C</users/123>.
+
+If not mounted, this is the same as C<< $c->req->path >>.
+
+=cut
+
+sub local_path ($self) {
+    # If we have a mount path, the scope's path is already the local path
+    # (it was rewritten during dispatch)
+    return $self->{scope}{path} // '/';
+}
+
+=head2 full_path
+
+    my $path = $c->full_path;  # e.g., '/api/v1/users/123'
+
+Returns the full original request path, including any mount prefix.
+This is useful when you need the complete path as the client requested it.
+
+=cut
+
+sub full_path ($self) {
+    return $self->{scope}{_full_path} // $self->{scope}{path} // '/';
 }
 
 =head2 stash
@@ -346,6 +399,272 @@ sub content_type ($self, $type) {
     return $self->res_header('content-type', $type);
 }
 
+=head2 cookie
+
+    # Set a simple cookie
+    $c->cookie('theme' => 'dark');
+
+    # Set a cookie with options
+    $c->cookie('session_id' => $id,
+        expires  => time() + 3600,  # 1 hour from now
+        path     => '/',
+        secure   => 1,
+        httponly => 1,
+        samesite => 'Lax',
+    );
+
+Set a response cookie. Returns $c for chaining.
+
+Supported options:
+
+=over 4
+
+=item * expires - Expiration time as epoch timestamp
+
+=item * max_age - Cookie lifetime in seconds
+
+=item * domain - Cookie domain
+
+=item * path - Cookie path (default: '/')
+
+=item * secure - Only send over HTTPS
+
+=item * httponly - Not accessible via JavaScript
+
+=item * samesite - 'Strict', 'Lax', or 'None' (Note: 'None' requires secure)
+
+=back
+
+=cut
+
+sub cookie ($self, $name, $value, %opts) {
+    my $cookie_str = PAGI::Simple::CookieUtil::format_set_cookie($name, $value, %opts);
+    return $self->res_header('Set-Cookie', $cookie_str);
+}
+
+=head2 remove_cookie
+
+    $c->remove_cookie('session_id');
+    $c->remove_cookie('session_id', path => '/', domain => '.example.com');
+
+Remove a cookie by setting it with an expired date.
+Returns $c for chaining.
+
+You should specify the same path and domain that were used when setting
+the cookie, otherwise the browser may not remove it.
+
+=cut
+
+sub remove_cookie ($self, $name, %opts) {
+    my $cookie_str = PAGI::Simple::CookieUtil::format_removal_cookie($name, %opts);
+    return $self->res_header('Set-Cookie', $cookie_str);
+}
+
+=head2 cors
+
+    # Allow all origins
+    $c->cors;
+    $c->cors(origin => '*');
+
+    # Allow specific origin
+    $c->cors(origin => 'https://example.com');
+
+    # Full configuration
+    $c->cors(
+        origin      => 'https://example.com',
+        methods     => [qw(GET POST PUT DELETE)],
+        headers     => [qw(Content-Type Authorization)],
+        expose      => [qw(X-Custom-Header)],
+        credentials => 1,
+        max_age     => 86400,
+    );
+
+Add CORS headers to the response. Returns $c for chaining.
+
+This is useful for simple CORS setups where you control the response
+directly. For automatic CORS handling, see C<< $app->use_cors() >>.
+
+Options:
+
+=over 4
+
+=item * origin - Allowed origin ('*' or specific origin). Default: '*'
+
+=item * methods - Arrayref of allowed methods. Default: GET,POST,PUT,DELETE,PATCH
+
+=item * headers - Arrayref of allowed request headers. Default: Content-Type,Authorization
+
+=item * expose - Arrayref of response headers to expose to client
+
+=item * credentials - Boolean, allow credentials. Default: 0
+
+=item * max_age - Preflight cache time in seconds. Default: 86400
+
+=back
+
+Note: When credentials is true and origin is '*', the actual request
+origin will be echoed back instead of '*' (per CORS spec).
+
+=cut
+
+sub cors ($self, %opts) {
+    my $origin = $opts{origin} // '*';
+    my $credentials = $opts{credentials} // 0;
+    my $methods = $opts{methods} // [qw(GET POST PUT DELETE PATCH)];
+    my $headers = $opts{headers} // [qw(Content-Type Authorization)];
+    my $expose = $opts{expose} // [];
+    my $max_age = $opts{max_age} // 86400;
+
+    # Determine what origin to send back
+    my $allow_origin;
+    if ($origin eq '*' && $credentials) {
+        # With credentials, can't use wildcard - echo the request origin
+        my $req_origin = $self->req->header('origin');
+        $allow_origin = $req_origin // '*';
+    } else {
+        $allow_origin = $origin;
+    }
+
+    $self->res_header('Access-Control-Allow-Origin', $allow_origin);
+    $self->res_header('Vary', 'Origin');
+
+    if ($credentials) {
+        $self->res_header('Access-Control-Allow-Credentials', 'true');
+    }
+
+    if (@$expose) {
+        $self->res_header('Access-Control-Expose-Headers', join(', ', @$expose));
+    }
+
+    # Preflight headers (useful when manually handling OPTIONS)
+    if ($self->method eq 'OPTIONS') {
+        $self->res_header('Access-Control-Allow-Methods', join(', ', @$methods));
+        $self->res_header('Access-Control-Allow-Headers', join(', ', @$headers));
+        $self->res_header('Access-Control-Max-Age', $max_age);
+    }
+
+    return $self;
+}
+
+=head2 respond_to
+
+    $c->respond_to(
+        json => sub { $c->json({ data => 'value' }) },
+        html => sub { $c->html('<h1>Hello</h1>') },
+        xml  => sub { $c->content_type('application/xml')->text('<data>value</data>') },
+        any  => sub { $c->text('Fallback') },
+    );
+
+    # Or with hash references for simple cases:
+    $c->respond_to(
+        json => { json => { status => 'ok' } },
+        html => { html => '<h1>OK</h1>' },
+        any  => { text => 'OK', status => 200 },
+    );
+
+Automatically select the best response format based on the client's Accept
+header and execute the appropriate handler.
+
+The format is determined by:
+1. The Accept header
+2. Matching against the provided format handlers
+
+If no acceptable format is found and no C<any> handler is provided, a 406
+Not Acceptable response is sent.
+
+Supported format shortcuts: html, json, xml, text, etc.
+
+=cut
+
+sub respond_to ($self, %handlers) {
+    # Get list of supported formats (excluding 'any')
+    my @formats = grep { $_ ne 'any' } keys %handlers;
+
+    # Find best matching format
+    my $format = $self->req->preferred_type(@formats);
+
+    # Use 'any' fallback if no match
+    $format //= 'any' if exists $handlers{any};
+
+    unless ($format) {
+        # No acceptable format - send 406
+        $self->status(406)->text('Not Acceptable');
+        return;
+    }
+
+    my $handler = $handlers{$format};
+
+    if (ref($handler) eq 'CODE') {
+        # Execute callback
+        $handler->();
+    }
+    elsif (ref($handler) eq 'HASH') {
+        # Hash with response options
+        my %opts = %$handler;
+
+        $self->status($opts{status}) if defined $opts{status};
+
+        if (defined $opts{json}) {
+            $self->json($opts{json});
+        }
+        elsif (defined $opts{html}) {
+            $self->html($opts{html});
+        }
+        elsif (defined $opts{text}) {
+            $self->text($opts{text});
+        }
+        elsif (defined $opts{data}) {
+            $self->send_response($opts{data});
+        }
+    }
+}
+
+=head2 url_for
+
+    my $url = $c->url_for('user_show', id => 42);
+    my $url = $c->url_for('search', query => { q => 'perl' });
+
+Generate a URL for a named route with the given parameters.
+
+This is a convenience wrapper around C<< $c->app->url_for() >>.
+
+=cut
+
+sub url_for ($self, $name, %params) {
+    return $self->{app}->url_for($name, %params);
+}
+
+=head2 redirect_to
+
+    await $c->redirect_to('user_show', id => 42);
+    await $c->redirect_to('home');
+    await $c->redirect_to('search', query => { q => 'perl' }, status => 301);
+
+Redirect to a named route. This combines url_for with redirect.
+
+Options:
+
+=over 4
+
+=item * status - HTTP status code (default: 302)
+
+=item * All other parameters are passed to url_for
+
+=back
+
+=cut
+
+async sub redirect_to ($self, $name, %params) {
+    my $status = delete $params{status} // 302;
+    my $url = $self->url_for($name, %params);
+
+    unless (defined $url) {
+        die "Cannot redirect: unknown route '$name' or missing required parameters";
+    }
+
+    await $self->redirect($url, $status);
+}
+
 =head1 RESPONSE TERMINAL METHODS
 
 These methods send the response. They are async and should be awaited.
@@ -413,6 +732,304 @@ async sub redirect ($self, $url, $status = 302) {
     await $self->send_response('');
 }
 
+=head2 stream
+
+    await $c->stream(async sub ($writer) {
+        await $writer->write("Starting...\n");
+        await $writer->write("More data\n");
+        await $writer->close;
+    });
+
+    # With content type
+    await $c->stream(async sub ($writer) {
+        await $writer->writeln('{"items": [');
+        for my $item (@items) {
+            await $writer->writeln(encode_json($item) . ',');
+        }
+        await $writer->writeln(']}');
+        await $writer->close;
+    }, content_type => 'application/json');
+
+Send a streaming chunked response. The callback receives a
+L<PAGI::Simple::StreamWriter> object that can be used to write chunks.
+
+The stream is automatically closed if the callback completes without
+calling C<< $writer->close >>.
+
+Options:
+
+=over 4
+
+=item * content_type - Content-Type header (default: text/plain)
+
+=back
+
+=cut
+
+async sub stream ($self, $callback, %opts) {
+    die "Response already started" if $self->{_response_started};
+    $self->{_response_started} = 1;
+
+    # Set content type
+    my $content_type = $opts{content_type} // 'text/plain; charset=utf-8';
+    $self->content_type($content_type);
+
+    # Send response start
+    await $self->{send}->({
+        type    => 'http.response.start',
+        status  => $self->{_status},
+        headers => $self->{_headers},
+    });
+
+    # Create writer
+    my $writer = PAGI::Simple::StreamWriter->new($self);
+
+    # Call the callback
+    eval {
+        my $result = $callback->($writer);
+        if (Scalar::Util::blessed($result) && $result->can('get')) {
+            await $result;
+        }
+    };
+    my $err = $@;
+
+    # Ensure stream is closed (even on error)
+    unless ($writer->is_closed) {
+        await $writer->close;
+    }
+
+    # Track response size
+    $self->{_response_size} = $writer->bytes_sent;
+
+    # Re-throw error after closing
+    die $err if $err;
+}
+
+=head2 stream_from
+
+    # From an arrayref
+    await $c->stream_from(['chunk1', 'chunk2', 'chunk3']);
+
+    # From a coderef (iterator)
+    my $count = 0;
+    await $c->stream_from(sub {
+        return undef if $count >= 10;  # Return undef to end
+        return "chunk " . ++$count . "\n";
+    });
+
+    # From a filehandle
+    open my $fh, '<', $file;
+    await $c->stream_from($fh, chunk_size => 8192);
+
+Send a streaming response from an iterator source. The source can be:
+
+=over 4
+
+=item * An arrayref - Each element is sent as a chunk
+
+=item * A coderef - Called repeatedly; return undef to end the stream
+
+=item * A filehandle - Read and stream in chunks
+
+=back
+
+Options:
+
+=over 4
+
+=item * content_type - Content-Type header (default: text/plain)
+
+=item * chunk_size - Size of chunks when reading from filehandle (default: 65536)
+
+=back
+
+=cut
+
+async sub stream_from ($self, $source, %opts) {
+    die "Response already started" if $self->{_response_started};
+
+    my $content_type = $opts{content_type} // 'text/plain; charset=utf-8';
+    my $chunk_size = $opts{chunk_size} // 65536;
+
+    await $self->stream(async sub ($writer) {
+        if (ref($source) eq 'ARRAY') {
+            # Array of chunks
+            for my $chunk (@$source) {
+                await $writer->write($chunk);
+            }
+        }
+        elsif (ref($source) eq 'CODE') {
+            # Iterator coderef
+            while (1) {
+                my $chunk = $source->();
+                last unless defined $chunk;
+                await $writer->write($chunk);
+            }
+        }
+        elsif (ref($source) eq 'GLOB' || (Scalar::Util::blessed($source) && $source->can('read'))) {
+            # Filehandle
+            while (1) {
+                my $buffer;
+                my $bytes = read($source, $buffer, $chunk_size);
+                last unless $bytes;
+                await $writer->write($buffer);
+            }
+        }
+        else {
+            die "stream_from: unsupported source type " . ref($source);
+        }
+
+        await $writer->close;
+    }, content_type => $content_type);
+}
+
+=head2 send_file
+
+    await $c->send_file('/path/to/file.pdf');
+
+    # With options
+    await $c->send_file('/path/to/report.pdf',
+        filename     => 'my-report.pdf',  # Download filename
+        content_type => 'application/pdf',
+        inline       => 0,                # Force download (default)
+        chunk_size   => 65536,            # 64KB chunks (default)
+    );
+
+    # Inline display (e.g., images, PDFs in browser)
+    await $c->send_file('/path/to/image.jpg', inline => 1);
+
+Stream a file to the client. Automatically sets Content-Type based on
+file extension and Content-Disposition for downloads.
+
+Options:
+
+=over 4
+
+=item * filename - Filename for Content-Disposition (default: basename of path)
+
+=item * content_type - Override auto-detected Content-Type
+
+=item * inline - If true, display inline; if false, force download (default: 0)
+
+=item * chunk_size - Chunk size for streaming (default: 65536)
+
+=back
+
+=cut
+
+async sub send_file ($self, $path, %opts) {
+    die "Response already started" if $self->{_response_started};
+    die "File not found: $path" unless -f $path;
+    die "Cannot read file: $path" unless -r $path;
+
+    my $size = -s $path;
+    my $content_type = $opts{content_type} // _guess_mime_type($path);
+    my $filename = $opts{filename} // File::Basename::basename($path);
+    my $inline = $opts{inline} // 0;
+    my $chunk_size = $opts{chunk_size} // 65536;
+
+    # Set headers
+    $self->content_type($content_type);
+    $self->res_header('Content-Length', $size);
+
+    # Set Content-Disposition
+    my $disposition = $inline ? 'inline' : 'attachment';
+    # Sanitize filename for header
+    my $safe_filename = $filename;
+    $safe_filename =~ s/["\r\n]//g;  # Remove problematic characters
+    $self->res_header('Content-Disposition', qq{$disposition; filename="$safe_filename"});
+
+    $self->{_response_started} = 1;
+    $self->{_response_size} = $size;
+
+    # Send response start
+    await $self->{send}->({
+        type    => 'http.response.start',
+        status  => $self->{_status},
+        headers => $self->{_headers},
+    });
+
+    # Stream file
+    open my $fh, '<:raw', $path or die "Cannot open $path: $!";
+
+    my $total = 0;
+    while (my $bytes = read($fh, my $buffer, $chunk_size)) {
+        $total += $bytes;
+        my $more = $total < $size ? 1 : 0;
+
+        await $self->{send}->({
+            type => 'http.response.body',
+            body => $buffer,
+            more => $more,
+        });
+    }
+
+    close $fh;
+}
+
+# Internal: Guess MIME type from file extension
+sub _guess_mime_type ($path) {
+    my %mime_types = (
+        # Text
+        html  => 'text/html; charset=utf-8',
+        htm   => 'text/html; charset=utf-8',
+        css   => 'text/css; charset=utf-8',
+        js    => 'text/javascript; charset=utf-8',
+        mjs   => 'text/javascript; charset=utf-8',
+        txt   => 'text/plain; charset=utf-8',
+        xml   => 'application/xml; charset=utf-8',
+        json  => 'application/json; charset=utf-8',
+        csv   => 'text/csv; charset=utf-8',
+
+        # Images
+        png   => 'image/png',
+        jpg   => 'image/jpeg',
+        jpeg  => 'image/jpeg',
+        gif   => 'image/gif',
+        svg   => 'image/svg+xml',
+        ico   => 'image/x-icon',
+        webp  => 'image/webp',
+
+        # Fonts
+        woff  => 'font/woff',
+        woff2 => 'font/woff2',
+        ttf   => 'font/ttf',
+        otf   => 'font/otf',
+        eot   => 'application/vnd.ms-fontobject',
+
+        # Documents
+        pdf   => 'application/pdf',
+        doc   => 'application/msword',
+        docx  => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        xls   => 'application/vnd.ms-excel',
+        xlsx  => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        ppt   => 'application/vnd.ms-powerpoint',
+        pptx  => 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+
+        # Archives
+        zip   => 'application/zip',
+        gz    => 'application/gzip',
+        tar   => 'application/x-tar',
+        '7z'  => 'application/x-7z-compressed',
+        rar   => 'application/vnd.rar',
+
+        # Audio/Video
+        mp3   => 'audio/mpeg',
+        mp4   => 'video/mp4',
+        webm  => 'video/webm',
+        ogg   => 'audio/ogg',
+        wav   => 'audio/wav',
+
+        # Other
+        wasm  => 'application/wasm',
+    );
+
+    my ($ext) = $path =~ /\.([^.]+)$/;
+    $ext = lc($ext // '');
+
+    return $mime_types{$ext} // 'application/octet-stream';
+}
+
 =head2 send_response
 
     await $c->send_response($body);
@@ -426,6 +1043,7 @@ async sub send_response ($self, $body) {
     die "Response already started" if $self->{_response_started};
 
     $self->{_response_started} = 1;
+    $self->{_response_size} = length($body // '');
 
     # Send response start
     await $self->{send}->({
@@ -440,6 +1058,42 @@ async sub send_response ($self, $body) {
         body => $body,
         more => 0,
     });
+}
+
+=head2 response_size
+
+    my $size = $c->response_size;
+
+Returns the size of the response body in bytes (for logging).
+
+=cut
+
+sub response_size ($self) {
+    return $self->{_response_size};
+}
+
+=head2 response_status
+
+    my $status = $c->response_status;
+
+Returns the response status code (for logging).
+
+=cut
+
+sub response_status ($self) {
+    return $self->{_status};
+}
+
+=head2 response_headers
+
+    my $headers = $c->response_headers;
+
+Returns the response headers array (for logging).
+
+=cut
+
+sub response_headers ($self) {
+    return $self->{_headers};
 }
 
 =head2 abort
