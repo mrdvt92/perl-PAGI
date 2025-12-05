@@ -105,6 +105,10 @@ Keys:
 - `body` (Bytes, default `""`) -- Response body chunk
 - `more` (Int, default `0`) -- Indicates more body content to follow (`1` if true, otherwise `0`)
 
+Applications **must** provide `body` as encoded bytes. For text content, this 
+typically means UTF-8 encoding before sending. The `Content-Length` header (if 
+present) must reflect byte length, not character length.
+
 ### Response Trailers - `send` event
 
 Only valid when `http.response.start` was sent with `trailers => 1`. After trailers are transmitted the server must consider the response body complete.
@@ -179,6 +183,13 @@ The `subprotocols` key is an arrayref of strings parsed from the `Sec-WebSocket-
 - `text` (String, optional)
 
 Exactly one must be non-null.
+
+The server **must** UTF-8 decode incoming text frames into Unicode characters 
+for `text`, and UTF-8 encode outgoing `text` values to wire format. Binary 
+frames pass through as raw `bytes` without encoding transformation.
+
+If a text frame contains invalid UTF-8, the server **must** fail the WebSocket 
+connection with close code 1007 (Invalid frame payload data) per RFC 6455.
 
 #### Send - `send` event
 
@@ -272,7 +283,11 @@ Response mappings:
 
 ## PAGI Encoding Differences
 
-- `path`: Decoded UTF-8 string from percent-encoded input
+- `path`: Decoded UTF-8 string from percent-encoded input. The server first 
+  percent-decodes `raw_path`, then UTF-8 decodes the resulting bytes into 
+  Unicode characters. If the bytes are not valid UTF-8, the server **should** 
+  replace invalid sequences with U+FFFD (replacement character) rather than 
+  rejecting the request.
 - `headers`: Represented as bytes exactly as sent/received
 - `query_string`: Raw bytes from URL after `?`, percent-encoded
 - `root_path`: Unicode path string matching `SCRIPT_NAME`

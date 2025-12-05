@@ -135,7 +135,48 @@ subtest 'multiple values in form' => sub {
     is($tags[2], 'async', 'third tag');
 };
 
-# Test 10: Non-form content-type
+# Test 10: UTF-8 decoding with replacement
+subtest 'UTF-8 decoding with replacement' => sub {
+    my $receive = mock_receive('name=%E6%97%A5%E6%9C%AC%E8%AA%9E&broken=%FF');
+    my $scope = {
+        headers => [['content-type', 'application/x-www-form-urlencoded']],
+    };
+    my $req = PAGI::Simple::Request->new($scope, $receive);
+
+    my $params = $req->body_params->get;
+
+    is($params->get('name'), "日本語", 'UTF-8 decoded into characters');
+    is($params->get('broken'), "\x{FFFD}", 'invalid byte replaced with U+FFFD');
+};
+
+# Test 11: Strict body params croak on invalid UTF-8
+subtest 'strict body params croak' => sub {
+    my $receive = mock_receive('broken=%FF');
+    my $scope = {
+        headers => [['content-type', 'application/x-www-form-urlencoded']],
+    };
+    my $req = PAGI::Simple::Request->new($scope, $receive);
+
+    like dies { $req->body_params(strict => 1)->get }, qr/UTF-8/i, 'strict body_params croak on invalid UTF-8';
+    like dies { $req->body_param('broken', strict => 1)->get }, qr/UTF-8/i, 'strict body_param croak on invalid UTF-8';
+
+    # Default still replaces
+    is($req->body_param('broken')->get, "\x{FFFD}", 'default decoding still returns replacement');
+};
+
+# Test 12: Raw body params preserve bytes
+subtest 'raw body params' => sub {
+    my $receive = mock_receive('name=%E6%97%A5%E6%9C%AC%E8%AA%9E');
+    my $scope = {
+        headers => [['content-type', 'application/x-www-form-urlencoded']],
+    };
+    my $req = PAGI::Simple::Request->new($scope, $receive);
+
+    my $raw = $req->raw_body_param('name')->get;
+    is(unpack('H*', $raw), 'e697a5e69cace8aa9e', 'raw bytes preserved');
+};
+
+# Test 13: Non-form content-type
 subtest 'non-form content-type' => sub {
     my $receive = mock_receive('not=form&data');
     my $scope = {
@@ -149,7 +190,7 @@ subtest 'non-form content-type' => sub {
     is(scalar $params->keys, 0, 'no params for non-form content');
 };
 
-# Test 11: JSON body parsing
+# Test 14: JSON body parsing
 subtest 'JSON body parsing' => sub {
     my $receive = mock_receive('{"name":"John","age":30,"active":true}');
     my $req = PAGI::Simple::Request->new({}, $receive);
@@ -162,7 +203,7 @@ subtest 'JSON body parsing' => sub {
     ok($data->{active}, 'active field is true');
 };
 
-# Test 12: JSON array
+# Test 15: JSON array
 subtest 'JSON array' => sub {
     my $receive = mock_receive('[1,2,3,"four"]');
     my $req = PAGI::Simple::Request->new({}, $receive);
@@ -174,7 +215,7 @@ subtest 'JSON array' => sub {
     is($data->[3], 'four', 'fourth element');
 };
 
-# Test 13: Invalid JSON dies
+# Test 16: Invalid JSON dies
 subtest 'invalid JSON dies' => sub {
     my $receive = mock_receive('not valid json');
     my $req = PAGI::Simple::Request->new({}, $receive);
@@ -186,7 +227,7 @@ subtest 'invalid JSON dies' => sub {
     ok($died, 'json_body dies on invalid JSON');
 };
 
-# Test 14: json_body_safe returns undef on error
+# Test 17: json_body_safe returns undef on error
 subtest 'json_body_safe on invalid JSON' => sub {
     my $receive = mock_receive('not valid json');
     my $req = PAGI::Simple::Request->new({}, $receive);
@@ -196,7 +237,7 @@ subtest 'json_body_safe on invalid JSON' => sub {
     ok(!defined $data, 'json_body_safe returns undef on invalid JSON');
 };
 
-# Test 15: json_body_safe on valid JSON
+# Test 18: json_body_safe on valid JSON
 subtest 'json_body_safe on valid JSON' => sub {
     my $receive = mock_receive('{"ok":true}');
     my $req = PAGI::Simple::Request->new({}, $receive);

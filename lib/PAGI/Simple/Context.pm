@@ -9,6 +9,8 @@ our $VERSION = '0.01';
 use Future::AsyncAwait;
 use Hash::MultiValue;
 use Scalar::Util qw(blessed);
+use Encode qw(encode decode FB_CROAK LEAVE_SRC);
+use Carp qw(croak);
 use PAGI::Simple::Request;
 use PAGI::Simple::Response;
 use PAGI::Simple::CookieUtil;
@@ -247,6 +249,10 @@ then body params. Returns the first value found.
 
 This is an async method because body params may need to be read.
 
+Values are decoded as UTF-8 with replacement characters. Use the request's
+raw/strict accessors (e.g., C<raw_query_param>, C<body_param(strict =E<gt> 1)>)
+if you need byte-level access or strict decoding.
+
 For path-only params (sync), use C<< $c->path_params->{name} >>.
 
 =cut
@@ -288,6 +294,9 @@ Returns all parameters merged from path, query, and body as a Hash::MultiValue.
 Path params take precedence over query, which takes precedence over body.
 
 This is an async method because body params may need to be read.
+Values are decoded as UTF-8 with replacement characters. For raw or strict
+decoding, access the request helpers directly (C<raw_query>, C<raw_body_params>,
+or pass C<strict =E<gt> 1>).
 
 =cut
 
@@ -729,7 +738,7 @@ Send a plain text response. Optionally specify status code.
 async sub text ($self, $body, $status = undef) {
     $self->{_status} = $status if defined $status;
     $self->content_type('text/plain; charset=utf-8');
-    await $self->send_response($body);
+    await $self->send_utf8($body);
 }
 
 =head2 html
@@ -744,7 +753,7 @@ Send an HTML response. Optionally specify status code.
 async sub html ($self, $body, $status = undef) {
     $self->{_status} = $status if defined $status;
     $self->content_type('text/html; charset=utf-8');
-    await $self->send_response($body);
+    await $self->send_utf8($body);
 }
 
 =head2 json
@@ -760,7 +769,7 @@ async sub json ($self, $data, $status = undef) {
     $self->{_status} = $status if defined $status;
     $self->content_type('application/json; charset=utf-8');
     my $body = PAGI::Simple::Response->json_encode($data);
-    await $self->send_response($body);
+    await $self->send_utf8($body);
 }
 
 =head2 redirect
@@ -1196,6 +1205,61 @@ sub _guess_mime_type ($path) {
     $ext = lc($ext // '');
 
     return $mime_types{$ext} // 'application/octet-stream';
+}
+
+=head2 send_utf8
+
+    await $c->send_utf8($body);
+    await $c->send_utf8($body, charset => 'utf-8');
+
+Encode a string body (if needed), ensure the Content-Type header includes a
+charset (default utf-8), set Content-Length based on encoded bytes, and send
+the response. If Content-Type already specifies a charset, that encoding is
+used unless overridden via C<charset>. Callers should pass decoded text
+strings; invalid bytes will croak. Use C<send_response> for raw/bytes.
+
+=cut
+
+async sub send_utf8 ($self, $body, %opts) {
+    die "Response already started" if $self->{_response_started};
+
+    my $charset = delete $opts{charset};
+    croak("Unknown options to send_utf8: " . join(', ', keys %opts)) if %opts;
+
+    my $headers = $self->{_headers};
+    my $ct_header;
+    for my $header (@$headers) {
+        if (lc($header->[0]) eq 'content-type') {
+            $ct_header = $header;
+            last;
+        }
+    }
+
+    if (!$charset && $ct_header && $ct_header->[1] =~ /;\s*charset=([^;]+)/i) {
+        $charset = lc $1;
+    }
+    $charset //= 'utf-8';
+
+    my $text = defined $body ? $body : '';
+    my $encoded = encode($charset, $text, FB_CROAK | LEAVE_SRC);
+
+    if ($ct_header) {
+        if ($ct_header->[1] =~ /;\s*charset=/i) {
+            $ct_header->[1] =~ s/(;\s*charset=)[^;]+/$1$charset/i;
+        }
+        else {
+            $ct_header->[1] .= "; charset=$charset";
+        }
+    }
+    else {
+        push @$headers, ['content-type', "text/plain; charset=$charset"];
+    }
+
+    # Replace any existing Content-Length with the correct byte length
+    @$headers = grep { lc($_->[0]) ne 'content-length' } @$headers;
+    push @$headers, ['content-length', length($encoded // '')];
+
+    await $self->send_response($encoded);
 }
 
 =head2 send_response

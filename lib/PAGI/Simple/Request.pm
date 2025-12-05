@@ -9,6 +9,8 @@ our $VERSION = '0.01';
 use Hash::MultiValue;
 use Future::AsyncAwait;
 use JSON::MaybeXS ();
+use Encode qw(decode FB_CROAK FB_DEFAULT LEAVE_SRC);
+use Carp qw(croak);
 use PAGI::Simple::CookieUtil;
 use PAGI::Simple::Negotiate;
 use PAGI::Simple::MultipartParser;
@@ -123,21 +125,56 @@ sub query_string ($self) {
     return $self->{scope}{query_string} // '';
 }
 
+=head2 raw_query_string
+
+    my $qs = $req->raw_query_string;
+
+Alias for L</query_string>; provided for clarity alongside the raw query
+accessors.
+
+=cut
+
+sub raw_query_string ($self) {
+    return $self->query_string;
+}
+
 =head2 query
 
     my $query = $req->query;  # Hash::MultiValue
     my @values = $query->get_all('tags');
 
-Returns query parameters as a Hash::MultiValue object. Parameters are
-URL-decoded automatically.
+Returns query parameters as a Hash::MultiValue object. Keys and values are
+URL-decoded and then decoded as UTF-8 using replacement characters (U+FFFD)
+for invalid byte sequences.
+
+Options:
+
+=over 4
+
+=item * C<strict =E<gt> 1> - croak if the data is not valid UTF-8.
+
+=item * C<raw =E<gt> 1> - skip UTF-8 decoding and return byte strings.
+
+=back
 
 =cut
 
-sub query ($self) {
-    unless ($self->{_query}) {
-        $self->{_query} = $self->_parse_query_string($self->query_string);
-    }
-    return $self->{_query};
+sub query ($self, %opts) {
+    my $strict = delete $opts{strict} // 0;
+    my $raw    = delete $opts{raw}    // 0;
+    croak("Unknown options to query: " . join(', ', keys %opts)) if %opts;
+
+    my $cache_key = $raw ? '_query_raw' : ($strict ? '_query_strict' : '_query');
+    return $self->{$cache_key} if $self->{$cache_key};
+
+    my $parsed = $self->_parse_query_string(
+        $self->query_string,
+        raw    => $raw,
+        strict => $strict,
+    );
+
+    $self->{$cache_key} = $parsed;
+    return $parsed;
 }
 
 =head2 query_param
@@ -146,12 +183,17 @@ sub query ($self) {
 
 Returns a single query parameter value (first value if multiple exist).
 Returns undef if the parameter is not present.
+Accepts the same options as L</query>.
 
 =cut
 
-sub query_param ($self, $name) {
+sub query_param ($self, $name, %opts) {
+    my $strict = delete $opts{strict} // 0;
+    my $raw    = delete $opts{raw}    // 0;
+    croak("Unknown options to query_param: " . join(', ', keys %opts)) if %opts;
+
     # Hash::MultiValue's get() returns last value, but we want first
-    my @values = $self->query->get_all($name);
+    my @values = $self->query(raw => $raw, strict => $strict)->get_all($name);
     return @values ? $values[0] : undef;
 }
 
@@ -161,16 +203,61 @@ sub query_param ($self, $name) {
 
 Returns all values for a query parameter as an arrayref.
 Returns an empty arrayref if the parameter is not present.
+Accepts the same options as L</query>.
 
 =cut
 
-sub query_params ($self, $name) {
-    my @values = $self->query->get_all($name);
+sub query_params ($self, $name, %opts) {
+    my $strict = delete $opts{strict} // 0;
+    my $raw    = delete $opts{raw}    // 0;
+    croak("Unknown options to query_params: " . join(', ', keys %opts)) if %opts;
+
+    my @values = $self->query(raw => $raw, strict => $strict)->get_all($name);
     return \@values;
 }
 
+=head2 raw_query
+
+    my $raw = $req->raw_query;  # Hash::MultiValue with byte strings
+
+Returns query parameters without UTF-8 decoding (percent-decoded bytes).
+
+=cut
+
+sub raw_query ($self) {
+    return $self->query(raw => 1);
+}
+
+=head2 raw_query_param
+
+    my $raw = $req->raw_query_param('name');
+
+Returns a single query parameter value without UTF-8 decoding.
+
+=cut
+
+sub raw_query_param ($self, $name) {
+    return $self->query_param($name, raw => 1);
+}
+
+=head2 raw_query_params
+
+    my $values = $req->raw_query_params('tags');
+
+Returns all values for a query parameter without UTF-8 decoding.
+
+=cut
+
+sub raw_query_params ($self, $name) {
+    return $self->query_params($name, raw => 1);
+}
+
 # Internal: Parse query string into Hash::MultiValue
-sub _parse_query_string ($self, $qs) {
+sub _parse_query_string ($self, $qs, %opts) {
+    my $raw    = delete $opts{raw}    // 0;
+    my $strict = delete $opts{strict} // 0;
+    croak("Unknown options to _parse_query_string: " . join(', ', keys %opts)) if %opts;
+
     my @pairs;
 
     return Hash::MultiValue->new() unless defined $qs && length $qs;
@@ -179,10 +266,13 @@ sub _parse_query_string ($self, $qs) {
         my ($key, $value) = split /=/, $pair, 2;
         next unless defined $key && length $key;
 
-        $key   = _url_decode($key);
-        $value = defined $value ? _url_decode($value) : '';
+        my $key_raw   = _url_decode($key);
+        my $value_raw = defined $value ? _url_decode($value) : '';
 
-        push @pairs, $key, $value;
+        my $key_final   = $raw ? $key_raw   : _decode_utf8($key_raw,   $strict);
+        my $value_final = $raw ? $value_raw : _decode_utf8($value_raw, $strict);
+
+        push @pairs, $key_final, $value_final;
     }
 
     return Hash::MultiValue->new(@pairs);
@@ -199,6 +289,14 @@ sub _url_decode ($str) {
     $str =~ s/%([0-9A-Fa-f]{2})/chr(hex($1))/ge;
 
     return $str;
+}
+
+# Internal: Decode UTF-8 with replacement or croak in strict mode
+sub _decode_utf8 ($str, $strict) {
+    return '' unless defined $str;
+    my $flag = $strict ? FB_CROAK : FB_DEFAULT;
+    $flag |= LEAVE_SRC;
+    return decode('UTF-8', $str, $flag);
 }
 
 =head2 headers
@@ -239,6 +337,27 @@ Header names are case-insensitive.
 
 sub header ($self, $name) {
     return $self->headers->get(lc $name);
+}
+
+=head2 header_utf8
+
+    my $value = $req->header_utf8('X-Name');
+    my $strict = $req->header_utf8('X-Name', strict => 1);
+
+Returns a header value decoded as UTF-8. Invalid byte sequences are
+replaced with U+FFFD by default. Pass C<strict =E<gt> 1> to croak on
+invalid UTF-8. Returns undef if the header is not present.
+
+=cut
+
+sub header_utf8 ($self, $name, %opts) {
+    my $strict = delete $opts{strict} // 0;
+    croak("Unknown options to header_utf8: " . join(', ', keys %opts)) if %opts;
+
+    my $value = $self->header($name);
+    return undef unless defined $value;
+
+    return _decode_utf8($value, $strict);
 }
 
 =head2 content_type
@@ -525,25 +644,46 @@ async sub body ($self) {
     my $params = await $req->body_params;  # Hash::MultiValue
 
 Parses the request body as form data (application/x-www-form-urlencoded)
-and returns a Hash::MultiValue object.
+and returns a Hash::MultiValue object. Values are URL-decoded and then
+decoded as UTF-8 with replacement characters (U+FFFD) for invalid byte
+sequences.
+
+Options:
+
+=over 4
+
+=item * C<strict =E<gt> 1> - croak on invalid UTF-8.
+
+=item * C<raw =E<gt> 1> - skip UTF-8 decoding and return byte strings.
+
+=back
 
 =cut
 
-async sub body_params ($self) {
-    return $self->{_body_params} if $self->{_body_params};
+async sub body_params ($self, %opts) {
+    my $strict = delete $opts{strict} // 0;
+    my $raw    = delete $opts{raw}    // 0;
+    croak("Unknown options to body_params: " . join(', ', keys %opts)) if %opts;
+
+    my $cache_key = $raw ? '_body_params_raw' : ($strict ? '_body_params_strict' : '_body_params');
+    return $self->{$cache_key} if $self->{$cache_key};
 
     my $body = await $self->body;
     my $ct = $self->content_type;
 
     # Only parse form data
     if ($ct =~ m{^application/x-www-form-urlencoded}i) {
-        $self->{_body_params} = $self->_parse_query_string($body);
+        $self->{$cache_key} = $self->_parse_query_string(
+            $body,
+            raw    => $raw,
+            strict => $strict,
+        );
     }
     else {
-        $self->{_body_params} = Hash::MultiValue->new();
+        $self->{$cache_key} = Hash::MultiValue->new();
     }
 
-    return $self->{_body_params};
+    return $self->{$cache_key};
 }
 
 =head2 body_param
@@ -552,13 +692,38 @@ async sub body_params ($self) {
 
 Returns a single form parameter value (first value if multiple exist).
 Returns undef if the parameter is not present.
+Accepts the same options as L</body_params>.
 
 =cut
 
-async sub body_param ($self, $name) {
-    my $params = await $self->body_params;
+async sub body_param ($self, $name, %opts) {
+    my $params = await $self->body_params(%opts);
     my @values = $params->get_all($name);
     return @values ? $values[0] : undef;
+}
+
+=head2 raw_body_params
+
+    my $params = await $req->raw_body_params;
+
+Returns form parameters without UTF-8 decoding (percent-decoded bytes).
+
+=cut
+
+async sub raw_body_params ($self) {
+    return await $self->body_params(raw => 1);
+}
+
+=head2 raw_body_param
+
+    my $value = await $req->raw_body_param('email');
+
+Returns a single form parameter value without UTF-8 decoding.
+
+=cut
+
+async sub raw_body_param ($self, $name) {
+    return await $self->body_param($name, raw => 1);
 }
 
 =head2 json_body

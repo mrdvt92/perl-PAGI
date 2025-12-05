@@ -40,7 +40,8 @@ Encode a Perl data structure to JSON string.
 =cut
 
 sub json_encode ($class, $data) {
-    return JSON::MaybeXS->new(utf8 => 1, canonical => 1)->encode($data);
+    # Return decoded character string; send_utf8 will handle encoding to bytes
+    return JSON::MaybeXS->new(utf8 => 0, canonical => 1)->encode($data);
 }
 
 =head2 json_decode

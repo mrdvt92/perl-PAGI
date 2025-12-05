@@ -132,11 +132,40 @@ subtest 'unicode' => sub {
     });
 
     my $value = $req->query_param('name');
-    # The bytes should be correctly decoded
-    is(length($value), 9, 'nine bytes for Japanese characters');
+    is($value, "日本語", 'UTF-8 decoded into characters');
+    is(length($value), 3, 'three characters for Japanese text');
 };
 
-# Test 12: Semicolon as separator (alternative to &)
+# Test 12: Invalid UTF-8 replaced by default
+subtest 'invalid UTF-8 replacement' => sub {
+    my $req = PAGI::Simple::Request->new({
+        query_string => 'bad=%FF%FF',
+    });
+
+    my $value = $req->query_param('bad');
+    is($value, "\x{FFFD}\x{FFFD}", 'invalid bytes replaced with U+FFFD');
+};
+
+# Test 13: Strict decoding croaks on invalid UTF-8
+subtest 'strict decoding croaks' => sub {
+    my $req = PAGI::Simple::Request->new({
+        query_string => 'bad=%FF',
+    });
+
+    like dies { $req->query_param('bad', strict => 1) }, qr/UTF-8/i, 'strict mode croaks on invalid UTF-8';
+};
+
+# Test 14: Raw query access keeps bytes
+subtest 'raw query access' => sub {
+    my $req = PAGI::Simple::Request->new({
+        query_string => 'name=%E6%97%A5%E6%9C%AC%E8%AA%9E',
+    });
+
+    my $raw = $req->raw_query_param('name');
+    is(unpack('H*', $raw), 'e697a5e69cace8aa9e', 'raw bytes preserved');
+};
+
+# Test 15: Semicolon as separator (alternative to &)
 subtest 'semicolon separator' => sub {
     my $req = PAGI::Simple::Request->new({
         query_string => 'a=1;b=2;c=3',
@@ -147,7 +176,7 @@ subtest 'semicolon separator' => sub {
     is($req->query_param('c'), '3', 'c param');
 };
 
-# Test 13: Mixed & and ; separators
+# Test 16: Mixed & and ; separators
 subtest 'mixed separators' => sub {
     my $req = PAGI::Simple::Request->new({
         query_string => 'a=1&b=2;c=3&d=4',
@@ -159,7 +188,7 @@ subtest 'mixed separators' => sub {
     is($req->query_param('d'), '4', 'd param');
 };
 
-# Test 14: Query object is cached
+# Test 17: Query object is cached
 subtest 'query caching' => sub {
     my $req = PAGI::Simple::Request->new({
         query_string => 'foo=bar',
@@ -171,7 +200,7 @@ subtest 'query caching' => sub {
     is($query1, $query2, 'query object is cached');
 };
 
-# Test 15: Case-sensitive parameter names
+# Test 18: Case-sensitive parameter names
 subtest 'case sensitive params' => sub {
     my $req = PAGI::Simple::Request->new({
         query_string => 'Name=John&name=jane&NAME=BOB',

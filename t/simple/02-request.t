@@ -218,4 +218,20 @@ subtest 'headers caching' => sub {
     is($headers1, $headers2, 'headers returns same object on multiple calls');
 };
 
+# Test 17: header_utf8 helper
+subtest 'header_utf8 helper' => sub {
+    my $req = PAGI::Simple::Request->new({
+        headers => [
+            ['X-Name', "caf\xC3\xA9"],
+            ['X-Bad', "bad\xFF"],
+        ],
+    });
+
+    is($req->header_utf8('X-Name'), "caf\x{E9}", 'header_utf8 decodes UTF-8');
+    is($req->header_utf8('x-name'), "caf\x{E9}", 'case-insensitive decode');
+    is($req->header_utf8('X-Bad'), "bad\x{FFFD}", 'invalid bytes replaced with U+FFFD');
+    like dies { $req->header_utf8('X-Bad', strict => 1) }, qr/UTF-8/i, 'strict header_utf8 croaks on invalid UTF-8';
+    ok(!defined $req->header_utf8('Missing'), 'missing header returns undef');
+};
+
 done_testing;

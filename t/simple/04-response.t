@@ -3,6 +3,7 @@ use warnings;
 use experimental 'signatures';
 use Test2::V0;
 use Future;
+use Encode qw(encode);
 
 # Test: Response building in PAGI::Simple::Context
 
@@ -124,6 +125,9 @@ subtest 'text() terminal' => sub {
     is($sent->[1]{type}, 'http.response.body', 'second event is response.body');
     is($sent->[1]{body}, 'Hello, World!', 'body content');
     is($sent->[1]{more}, 0, 'no more body');
+
+    my @cl = grep { lc($_->[0]) eq 'content-length' } @{$sent->[0]{headers}};
+    is($cl[0][1], length('Hello, World!'), 'content-length set for text body');
 };
 
 # Test 9: text() with status
@@ -144,6 +148,8 @@ subtest 'html() terminal' => sub {
     my @ct = grep { $_->[0] eq 'content-type' } @{$sent->[0]{headers}};
     like($ct[0][1], qr{text/html}, 'content-type is text/html');
     is($sent->[1]{body}, '<h1>Hello</h1>', 'body is HTML');
+    my @cl = grep { lc($_->[0]) eq 'content-length' } @{$sent->[0]{headers}};
+    is($cl[0][1], length('<h1>Hello</h1>'), 'content-length set for HTML body');
 };
 
 # Test 11: json() sends response
@@ -159,6 +165,8 @@ subtest 'json() terminal' => sub {
     ok($body, 'has body');
     like($body, qr/"message"/, 'JSON contains message');
     like($body, qr/"count"/, 'JSON contains count');
+    my @cl = grep { lc($_->[0]) eq 'content-length' } @{$sent->[0]{headers}};
+    is($cl[0][1], length($body), 'content-length matches JSON bytes');
 };
 
 # Test 12: json() with status
@@ -237,6 +245,42 @@ subtest 'cannot send twice' => sub {
     $error = $@;
 
     like($error, qr/Response already started/, 'error on double send');
+};
+
+# Test 19: send_utf8 helper encodes and sets headers
+subtest 'send_utf8 helper encodes and sets headers' => sub {
+    my ($c, $sent) = mock_context();
+    my $text = "h\x{e9}llo";
+
+    $c->send_utf8($text)->get;
+
+    my $expected = encode('UTF-8', $text);
+    my @ct = grep { $_->[0] eq 'content-type' } @{$sent->[0]{headers}};
+    is($ct[0][1], 'text/plain; charset=utf-8', 'default content-type with charset');
+
+    my @cl = grep { lc($_->[0]) eq 'content-length' } @{$sent->[0]{headers}};
+    is($cl[0][1], length($expected), 'content-length set from encoded bytes');
+
+    is($sent->[1]{body}, $expected, 'body encoded to UTF-8 bytes');
+};
+
+# Test 20: send_utf8 respects existing charset in content-type
+subtest 'send_utf8 respects existing charset' => sub {
+    my ($c, $sent) = mock_context();
+    my $text = "h\x{e9}llo";
+
+    $c->content_type('text/plain; charset=iso-8859-1');
+    $c->send_utf8($text)->get;
+
+    my $expected = encode('iso-8859-1', $text);
+
+    my @ct = grep { $_->[0] eq 'content-type' } @{$sent->[0]{headers}};
+    is($ct[0][1], 'text/plain; charset=iso-8859-1', 'existing charset kept');
+
+    my @cl = grep { lc($_->[0]) eq 'content-length' } @{$sent->[0]{headers}};
+    is($cl[0][1], length($expected), 'content-length matches encoded bytes');
+
+    is($sent->[1]{body}, $expected, 'body encoded using header charset');
 };
 
 done_testing;

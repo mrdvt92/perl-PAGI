@@ -1697,6 +1697,25 @@ sub any ($self, @args) { return $self->{app}->any(@args); }
 
 package PAGI::Simple;
 
+=head1 UTF-8 HANDLING
+
+=over 4
+
+=item * Input parameters (path, query, form) are decoded as UTF-8 with U+FFFD
+replacement. Use C<< strict => 1 >> on C<req->query>, C<req->body_param>, or
+C<req->header_utf8> to croak on invalid bytes, and C<raw_query_param> /
+C<raw_body_param> for byte access.
+
+=item * Headers are raw by default; C<header_utf8> provides decoding with the
+same replacement/strict options.
+
+=item * Responses: C<text>, C<html>, C<json>, and C<send_utf8> encode bodies to
+UTF-8 (or the charset already present on Content-Type), ensure a charset is
+set, and set C<Content-Length> from the encoded byte size. Use
+C<send_response> for raw/byte-oriented replies.
+
+=back
+
 =head1 SEE ALSO
 
 L<PAGI>, L<PAGI::Server>, L<PAGI::Simple::Context>

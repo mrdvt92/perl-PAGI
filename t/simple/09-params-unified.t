@@ -143,7 +143,28 @@ subtest 'param() precedence: query over body' => sub {
     is($field, 'from_query', 'query param takes precedence over body');
 };
 
-# Test 8: param() returns undef for missing
+# Test 8: param() decodes UTF-8 and exposes raw bytes
+subtest 'param() decoding and raw access' => sub {
+    my ($c, $sent) = mock_context(
+        scope => {
+            type => 'http',
+            method => 'GET',
+            path => '/',
+            query_string => 'word=%E6%97%A5%E6%9C%AC%E8%AA%9E&broken=%FF',
+        },
+    );
+
+    is($c->param('word')->get, "日本語", 'param returns decoded UTF-8');
+    is($c->param('broken')->get, "\x{FFFD}", 'param replaces invalid bytes');
+
+    my $params = $c->params->get;
+    is($params->get('word'), "日本語", 'params merges decoded data');
+    is($params->get('broken'), "\x{FFFD}", 'params keeps replacement char');
+
+    is(unpack('H*', $c->req->raw_query_param('word')), 'e697a5e69cace8aa9e', 'raw query param bytes available');
+};
+
+# Test 9: param() returns undef for missing
 subtest 'param() returns undef for missing' => sub {
     my ($c, $sent) = mock_context();
 
@@ -151,7 +172,7 @@ subtest 'param() returns undef for missing' => sub {
     ok(!defined $missing, 'param returns undef for missing param');
 };
 
-# Test 9: params() returns Hash::MultiValue
+# Test 10: params() returns Hash::MultiValue
 subtest 'params() returns Hash::MultiValue' => sub {
     my ($c, $sent) = mock_context(
         scope => {
@@ -167,7 +188,7 @@ subtest 'params() returns Hash::MultiValue' => sub {
     is(ref $params, 'Hash::MultiValue', 'params returns Hash::MultiValue');
 };
 
-# Test 10: params() merges all sources
+# Test 11: params() merges all sources
 subtest 'params() merges all sources' => sub {
     my ($c, $sent) = mock_context(
         scope => {
@@ -189,7 +210,7 @@ subtest 'params() merges all sources' => sub {
     ok(defined $params->get('email'), 'has body param');
 };
 
-# Test 11: Source-specific accessors
+# Test 12: Source-specific accessors
 subtest 'source-specific accessors' => sub {
     my ($c, $sent) = mock_context(
         scope => {
@@ -209,7 +230,7 @@ subtest 'source-specific accessors' => sub {
     is($c->req->body_param('email')->get, 'test@example.com', 'body_param via req');
 };
 
-# Test 12: Integration with app
+# Test 13: Integration with app
 subtest 'integration with app' => sub {
     my $app = PAGI::Simple->new;
     my $captured;
