@@ -491,6 +491,111 @@ sub user_agent ($self) {
     return $self->header('user-agent') // '';
 }
 
+=head2 is_htmx
+
+    if ($req->is_htmx) { ... }
+
+Returns true if the request is from htmx (HX-Request header is present).
+
+=cut
+
+sub is_htmx ($self) {
+    my $hx = $self->header('hx-request');
+    return defined($hx) && $hx eq 'true';
+}
+
+=head2 htmx_target
+
+    my $target = $req->htmx_target;  # e.g., "#todo-list"
+
+Returns the HX-Target header value (the CSS selector of the target element).
+Returns undef if the header is not present.
+
+=cut
+
+sub htmx_target ($self) {
+    return $self->header('hx-target');
+}
+
+=head2 htmx_trigger_name
+
+    my $name = $req->htmx_trigger_name;
+
+Returns the HX-Trigger-Name header value (the name attribute of the element
+that triggered the request). Returns undef if not present.
+
+=cut
+
+sub htmx_trigger_name ($self) {
+    return $self->header('hx-trigger-name');
+}
+
+=head2 htmx_trigger
+
+    my $trigger = $req->htmx_trigger;
+
+Returns the HX-Trigger header value (the id of the element that triggered
+the request). Returns undef if not present.
+
+=cut
+
+sub htmx_trigger ($self) {
+    return $self->header('hx-trigger');
+}
+
+=head2 htmx_current_url
+
+    my $url = $req->htmx_current_url;
+
+Returns the HX-Current-URL header value (the URL of the page that initiated
+the request). Returns undef if not present.
+
+=cut
+
+sub htmx_current_url ($self) {
+    return $self->header('hx-current-url');
+}
+
+=head2 htmx_prompt
+
+    my $input = $req->htmx_prompt;
+
+Returns the HX-Prompt header value (user input from hx-prompt attribute).
+Returns undef if not present.
+
+=cut
+
+sub htmx_prompt ($self) {
+    return $self->header('hx-prompt');
+}
+
+=head2 htmx_boosted
+
+    if ($req->htmx_boosted) { ... }
+
+Returns true if the request is from a hx-boost enhanced link or form.
+
+=cut
+
+sub htmx_boosted ($self) {
+    my $boosted = $self->header('hx-boosted');
+    return defined($boosted) && $boosted eq 'true';
+}
+
+=head2 htmx_history_restore_request
+
+    if ($req->htmx_history_restore_request) { ... }
+
+Returns true if the request is a history restoration request after a miss
+in the local history cache.
+
+=cut
+
+sub htmx_history_restore_request ($self) {
+    my $restore = $self->header('hx-history-restore-request');
+    return defined($restore) && $restore eq 'true';
+}
+
 =head2 cookies
 
     my $cookies = $req->cookies;  # { session => 'abc', theme => 'dark' }

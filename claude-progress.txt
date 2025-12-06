@@ -115,11 +115,88 @@ Templates use Template::EmbeddedPerl syntax:
 ## Feature List Progress
 
 - Total features: 100+
-- Passing: 0 (implementation just started)
-- Estimated coverage: ~5-10% (Step 1 foundation complete)
+- Passing: 8 (Steps 1-2 core functionality complete)
+- Remaining: 89
+
+---
+
+# Claude Code Progress - Session 2
+
+## Date: 2025-12-06
+
+## Summary
+
+Continued implementation of PAGI::Simple view layer. Completed Step 1 and Step 2
+core functionality including views(), render(), is_htmx(), and layout system.
+
+## Completed Tasks
+
+### 1. Fixed Template Helper Scoping Bug
+- Discovered that Template::EmbeddedPerl caches compiled templates globally
+- Helpers were capturing $self from first compilation, not current render
+- Fixed by using package variable $_current_view set during render()
+
+### 2. PAGI::Simple Integration
+- Added views() method to PAGI::Simple for configuring view layer
+- Added view() accessor to retrieve View instance
+- Added model_namespace and model_config options to new()
+
+### 3. PAGI::Simple::Context render() methods
+- render() - Renders template and sends HTML response
+- render_string() - Returns rendered HTML without sending
+- render_or_redirect() - htmx-aware: renders for htmx, redirects for browser
+- empty_or_redirect() - For delete operations
+- hx_trigger() - Set HX-Trigger response header
+- hx_redirect() - Set HX-Redirect response header
+- hx_refresh() - Set HX-Refresh response header
+
+### 4. PAGI::Simple::Request htmx methods
+- is_htmx() - Detect htmx requests
+- htmx_target() - Get HX-Target header
+- htmx_trigger() - Get HX-Trigger header
+- htmx_trigger_name() - Get HX-Trigger-Name header
+- htmx_current_url() - Get HX-Current-URL header
+- htmx_prompt() - Get HX-Prompt header
+- htmx_boosted() - Detect hx-boost requests
+- htmx_history_restore_request() - Detect history restoration
+
+### 5. Test Coverage Added
+- t/simple/31-views.t - Comprehensive views integration tests
+  - views() configuration
+  - Template rendering with variables
+  - Partial includes
+  - Layout system with extends()
+  - is_htmx detection
+  - htmx header accessors
+  - Auto-escaping
+  - raw() helper
+
+### 6. All Tests Pass
+- 113+ tests across all test files
+- All existing functionality preserved
+
+## Files Modified/Created
+
+### New Files:
+- t/simple/31-views.t
+
+### Modified Files:
+- lib/PAGI/Simple.pm (added views(), view(), model config)
+- lib/PAGI/Simple/Context.pm (added render methods, hx_* methods)
+- lib/PAGI/Simple/Request.pm (added is_htmx, htmx_* accessors)
+- lib/PAGI/Simple/View.pm (fixed $_current_view scoping)
+- feature_list.json (8 features now passing)
+- claude-progress.txt (this file)
+
+## Next Session Should Focus On
+
+1. **Step 3: htmx Integration** - Wire up htmx helpers to templates
+2. **Step 4: Auto-fragment Detection** - Automatic layout skipping for htmx
+3. **Step 5: TO_HTML Protocol** - Object self-rendering
+4. **Step 6: Named Routes** - route() helper with URL generation
+5. **Step 7: Model System** - Model auto-discovery and configuration
 
 ## Git Status
 
 Branch: pagi-simple-view
-Last commit: Initial setup commit with feature_list.json, init.sh, app_spec.txt, CLAUDE.md
-Pending: New modules and tests need to be committed
+Pending: New files and modifications need to be committed

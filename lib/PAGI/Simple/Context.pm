@@ -798,6 +798,142 @@ async sub json ($self, $data, $status = undef) {
     await $self->send_utf8($body);
 }
 
+=head2 render
+
+    await $c->render('template_name', key => $value, ...);
+    await $c->render('todos/index', todos => \@todos);
+
+Render a template using the application's view layer (configured via $app->views()).
+Variables passed are available in the template via the C<$v> object.
+
+Output is automatically UTF-8 encoded and sent with
+C<Content-Type: text/html; charset=utf-8>.
+
+Auto-detects htmx requests and renders fragment vs full page.
+For htmx requests (HX-Request header present), the layout is skipped.
+
+=cut
+
+async sub render ($self, $template_name, %vars) {
+    my $view = $self->{app}->view;
+    croak "No view configured. Call \$app->views() first." unless $view;
+
+    # Pass the context so the view can detect htmx requests
+    $vars{_context} = $self;
+
+    my $html = $view->render($template_name, %vars);
+    await $self->html($html);
+}
+
+=head2 render_string
+
+    my $html = $c->render_string('todos/_item', todo => $todo);
+
+Render a template and return the HTML string without sending a response.
+Useful for WebSocket/SSE or building up response manually.
+
+=cut
+
+sub render_string ($self, $template_string, %vars) {
+    my $view = $self->{app}->view;
+    croak "No view configured. Call \$app->views() first." unless $view;
+
+    $vars{_context} = $self;
+    return $view->render_string($template_string, %vars);
+}
+
+=head2 render_or_redirect
+
+    $c->render_or_redirect('/redirect_url', 'template', %vars);
+
+For htmx requests: renders the template and sends it.
+For browser requests: sends a redirect to the given URL.
+
+Useful for form submissions where htmx expects a partial update
+but browsers need a redirect for proper navigation.
+
+=cut
+
+async sub render_or_redirect ($self, $redirect_url, $template_name, %vars) {
+    if ($self->req->is_htmx) {
+        await $self->render($template_name, %vars);
+    } else {
+        await $self->redirect($redirect_url);
+    }
+}
+
+=head2 empty_or_redirect
+
+    $c->empty_or_redirect('/redirect_url');
+
+For htmx requests: sends an empty 200 response (for element removal).
+For browser requests: sends a redirect.
+
+Useful for delete actions where htmx swaps out the deleted element
+but browsers need a redirect.
+
+=cut
+
+async sub empty_or_redirect ($self, $redirect_url) {
+    if ($self->req->is_htmx) {
+        await $self->html('');
+    } else {
+        await $self->redirect($redirect_url);
+    }
+}
+
+=head2 hx_trigger
+
+    $c->hx_trigger('eventName');
+    $c->hx_trigger('eventName', key => 'value');
+
+Set the HX-Trigger response header to trigger client-side events.
+When called with just an event name, triggers a simple event.
+When called with key-value pairs, triggers an event with data (JSON encoded).
+
+=cut
+
+sub hx_trigger ($self, $event, %data) {
+    require JSON::MaybeXS;
+
+    if (%data) {
+        # Event with data
+        my $trigger_data = { $event => \%data };
+        $self->res_header('HX-Trigger', JSON::MaybeXS::encode_json($trigger_data));
+    } else {
+        # Simple event
+        $self->res_header('HX-Trigger', $event);
+    }
+    return $self;
+}
+
+=head2 hx_redirect
+
+    $c->hx_redirect('/new-location');
+
+Set the HX-Redirect response header for client-side redirect.
+htmx will perform a full page navigation to the given URL.
+
+=cut
+
+sub hx_redirect ($self, $url) {
+    $self->res_header('HX-Redirect', $url);
+    return $self;
+}
+
+=head2 hx_refresh
+
+    $c->hx_refresh;
+
+Set the HX-Refresh response header to trigger a full page refresh.
+
+=cut
+
+sub hx_refresh ($self) {
+    $self->res_header('HX-Refresh', 'true');
+    return $self;
+}
+
 =head2 redirect
 
     await $c->redirect("/other");

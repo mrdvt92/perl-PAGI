@@ -11,6 +11,7 @@ use Scalar::Util qw(blessed);
 use File::Spec;
 use Template::EmbeddedPerl;
 use PAGI::Simple::View::Helpers;
+use PAGI::Simple::View::Vars;
 
 =head1 NAME
 
@@ -65,6 +66,17 @@ Options:
 
 =item * roles - Arrayref of role names to compose into view
 
+=item * prepend - Extra Perl code to add at start of template subroutine
+
+=item * preamble - Package-level Perl code (e.g., use statements)
+
+To enable subroutine signatures in templates:
+
+    my $view = PAGI::Simple::View->new(
+        template_dir => './templates',
+        preamble     => 'use experimental "signatures";',
+    );
+
 =back
 
 =cut
@@ -78,6 +90,8 @@ sub new ($class, %args) {
         development  => $args{development}  // 0,
         helpers      => $args{helpers}      // {},
         roles        => $args{roles}        // [],
+        prepend      => $args{prepend}      // '',   # Extra code for template sub
+        preamble     => $args{preamble}     // '',   # Package-level code (use statements)
         _cache       => {},                # Template cache
         _context     => undef,             # Current request context
         _blocks      => {},                # Named content blocks
@@ -157,12 +171,20 @@ returns just the content block without layout wrapping.
 
 =cut
 
+# Package variable to track current view during rendering
+# This is needed because Template::EmbeddedPerl compiles helpers at template
+# compile time, but we need them to access the current view at render time.
+our $_current_view;
+
 sub render ($self, $template_name, %vars) {
     # Store any request context
     local $self->{_context} = $vars{_context} // $self->{_context};
     local $self->{_blocks} = {};
     local $self->{_layout} = undef;
     local $self->{_layout_vars} = {};
+
+    # Set current view for helpers to access
+    local $_current_view = $self;
 
     # Get compiled template
     my $template = $self->_get_template($template_name);
@@ -198,6 +220,7 @@ sub render_string ($self, $template_string, %vars) {
     local $self->{_blocks} = {};
     local $self->{_layout} = undef;
     local $self->{_layout_vars} = {};
+    local $_current_view = $self;
 
     # Compile the template string
     my $template = $self->_compile_template($template_string, 'string');
@@ -220,16 +243,12 @@ sub render_fragment ($self, $template_name, %vars) {
     local $self->{_blocks} = {};
     local $self->{_layout} = undef;
     local $self->{_layout_vars} = {};
+    local $_current_view = $self;
 
     my $template = $self->_get_template($template_name);
 
-    my %render_vars = (
-        %vars,
-        $self->_build_helpers(),
-    );
-
     # Always skip layout for fragments
-    return $template->render(\%render_vars);
+    return $template->render(\%vars);
 }
 
 =head2 include
@@ -244,7 +263,9 @@ or not - the view will find the file either way.
 sub include ($self, $partial_name, %vars) {
     my $template = $self->_get_template($partial_name);
     # Render with vars hashref as first arg (accessed as $v)
-    return $template->render(\%vars);
+    my $html = $template->render(\%vars);
+    # Return as SafeString (using raw, not new) so it won't be double-escaped
+    return Template::EmbeddedPerl::SafeString::raw($html);
 }
 
 =head2 clear_cache
@@ -293,56 +314,146 @@ sub _get_template ($self, $name) {
 
 # Internal: Compile a template string
 sub _compile_template ($self, $source, $name = 'string') {
+    # Build prepend: our internal code + user's custom prepend
+    my $prepend = 'my $v = PAGI::Simple::View::Vars->new(shift);';
+    $prepend .= ' ' . $self->{prepend} if $self->{prepend};
+
     # Create engine with our settings
     my $engine = Template::EmbeddedPerl->new(
-        prepend     => 'my $v = shift;',  # Variables available as $v->{name}
+        prepend     => $prepend,  # Variables available as $v->name or $v->{name}
+        preamble    => $self->{preamble},  # Package-level code (use statements)
         auto_escape => $self->{auto_escape},
-        helpers     => $self->_get_engine_helpers(),
+        helpers     => $self->_get_all_helpers(),
     );
 
     return $engine->from_string($source);
 }
 
+# Internal: Get all helpers (default + custom)
+# Merges Template::EmbeddedPerl default helpers with our view-specific helpers
+sub _get_all_helpers ($self) {
+    # Get default helpers from Template::EmbeddedPerl
+    # These include: raw, safe, safe_concat, html_escape, url_encode,
+    # escape_javascript, trim, mtrim, to_safe_string
+    my $engine = Template::EmbeddedPerl->new();
+    my %helpers = $engine->default_helpers();
+
+    # Add our view-specific helpers
+    my %view_helpers = %{$self->_get_engine_helpers()};
+    %helpers = (%helpers, %view_helpers);
+
+    # Add htmx helpers if Htmx module is available
+    eval {
+        require PAGI::Simple::View::Helpers::Htmx;
+        my $htmx_helpers = PAGI::Simple::View::Helpers::Htmx::get_helpers($self);
+        # Wrap htmx helpers to work with Template::EmbeddedPerl (receives $ep as first arg)
+        for my $name (keys %$htmx_helpers) {
+            my $original = $htmx_helpers->{$name};
+            $helpers{$name} = sub {
+                shift;  # Discard Template::EmbeddedPerl instance
+                return $original->(@_);
+            };
+        }
+    };
+
+    # Add custom helpers from constructor
+    for my $name (keys %{$self->{helpers}}) {
+        my $original = $self->{helpers}{$name};
+        $helpers{$name} = sub {
+            shift;  # Discard Template::EmbeddedPerl instance
+            return $original->(@_);
+        };
+    }
+
+    # Add role-provided helpers (methods starting with helper_)
+    {
+        no strict 'refs';
+        my $class = ref($self);
+        for my $method (grep { /^helper_/ } keys %{"${class}::"}) {
+            my $helper_name = $method =~ s/^helper_//r;
+            $helpers{$helper_name} = sub {
+                shift;  # Discard Template::EmbeddedPerl instance
+                my $view = $_current_view or die "No current view set during rendering";
+                return $view->$method(@_);
+            };
+        }
+    }
+
+    return \%helpers;
+}
+
 # Internal: Get helpers for Template::EmbeddedPerl engine
 # Note: Template::EmbeddedPerl passes itself as the first arg to helpers
+# IMPORTANT: These helpers must use $_current_view instead of $self because
+# templates may be compiled once but rendered with different view instances.
 sub _get_engine_helpers ($self) {
     return {
-        # Include partial - must be a closure over $self
+        # Include partial
         # Returns raw HTML (already rendered, should not be escaped again)
         include => sub {
             my $ep = shift;  # Template::EmbeddedPerl instance (for raw())
             my ($name, %vars) = @_;
-            my $html = $self->include($name, %vars);
+            my $view = $_current_view or die "No current view set during rendering";
+            my $html = $view->include($name, %vars);
             return $ep->raw($html);  # Return as safe string
         },
         # Layout helpers
         extends => sub {
             shift;  # Discard Template::EmbeddedPerl instance
             my ($layout, %vars) = @_;
-            $self->{_layout} = $layout;
-            $self->{_layout_vars} = \%vars;
+            my $view = $_current_view or die "No current view set during rendering";
+            $view->{_layout} = $layout;
+            $view->{_layout_vars} = \%vars;
             return '';
         },
+        # Retrieve content - main body or named block
         content => sub {
-            shift;  # Discard Template::EmbeddedPerl instance
-            return $self->{_blocks}{content} // '';
+            my $ep = shift;  # Template::EmbeddedPerl instance (for raw())
+            my ($name) = @_;
+            my $view = $_current_view or die "No current view set during rendering";
+            # If no name given, return main content; otherwise return named block
+            $name //= 'content';
+            return $ep->raw($view->{_blocks}{$name} // '');
         },
+        # Set/append content to a named block
         content_for => sub {
             shift;  # Discard Template::EmbeddedPerl instance
             my ($name, $content) = @_;
-            if (defined $content) {
-                $self->{_blocks}{$name} //= '';
-                $self->{_blocks}{$name} .= $content;
-                return '';
+            my $view = $_current_view or die "No current view set during rendering";
+            # If content is a coderef, call it with $view and use the result
+            if (ref($content) eq 'CODE') {
+                $content = $content->($view);
             }
-            return $self->{_blocks}{$name} // '';
+            $view->{_blocks}{$name} //= '';
+            $view->{_blocks}{$name} .= $content;
+            return '';
+        },
+        # Block helper (set named content block - replaces, doesn't append)
+        block => sub {
+            shift;  # Discard Template::EmbeddedPerl instance
+            my ($name, $content) = @_;
+            my $view = $_current_view or die "No current view set during rendering";
+            # If content is a coderef, call it with $view and use the result
+            if (ref($content) eq 'CODE') {
+                $content = $content->($view);
+            }
+            $view->{_blocks}{$name} = $content;
+            return '';
+        },
+        # Capture helper - capture template content into a variable
+        capture => sub {
+            shift;  # Discard Template::EmbeddedPerl instance
+            my ($code) = @_;
+            my $view = $_current_view or die "No current view set during rendering";
+            return ref($code) eq 'CODE' ? $code->($view) : ($code // '');
         },
         # Route helper
         route => sub {
             shift;  # Discard Template::EmbeddedPerl instance
             my ($name, %params) = @_;
-            if ($self->{_app} && $self->{_app}->can('url_for')) {
-                return $self->{_app}->url_for($name, %params) // '';
+            my $view = $_current_view or die "No current view set during rendering";
+            if ($view->{_app} && $view->{_app}->can('url_for')) {
+                return $view->{_app}->url_for($name, %params) // '';
             }
             return '';
         },
@@ -372,95 +483,6 @@ sub _find_template ($self, $name) {
     return undef;
 }
 
-# Internal: Build the helpers hash for template rendering
-sub _build_helpers ($self) {
-    my %helpers;
-
-    # Core helpers from PAGI::Simple::View::Helpers
-    %helpers = (
-        # Escaping
-        escape => sub ($text) {
-            return PAGI::Simple::View::Helpers::escape($text);
-        },
-        raw => sub ($html) {
-            return PAGI::Simple::View::Helpers::raw($html);
-        },
-        safe => sub ($text) {
-            return PAGI::Simple::View::Helpers::safe($text);
-        },
-
-        # Partial inclusion
-        include => sub ($name, @args) {
-            my %vars = @args;
-            return PAGI::Simple::View::Helpers::raw($self->include($name, %vars));
-        },
-
-        # Layout system
-        extends => sub ($layout, @args) {
-            my %vars = @args;
-            $self->{_layout} = $layout;
-            $self->{_layout_vars} = \%vars;
-            return '';  # Don't output anything
-        },
-
-        block => sub ($name, $content) {
-            $self->{_blocks}{$name} = $content;
-            return '';  # Don't output anything
-        },
-
-        content => sub () {
-            return PAGI::Simple::View::Helpers::raw($self->{_blocks}{content} // '');
-        },
-
-        content_for => sub ($name, $content = undef) {
-            if (defined $content) {
-                # Accumulate content
-                $self->{_blocks}{$name} //= '';
-                $self->{_blocks}{$name} .= $content;
-                return '';
-            }
-            return PAGI::Simple::View::Helpers::raw($self->{_blocks}{$name} // '');
-        },
-
-        # Route helper (if app available)
-        route => sub ($name, @args) {
-            my %params = @args;
-            if ($self->{_app} && $self->{_app}->can('url_for')) {
-                return $self->{_app}->url_for($name, %params) // '';
-            }
-            return '';
-        },
-
-        # Begin/end for block capture (Template::EmbeddedPerl style)
-        begin => sub { return ''; },
-        'end' => sub { return ''; },
-    );
-
-    # Add htmx helpers if Htmx module is available
-    eval {
-        require PAGI::Simple::View::Helpers::Htmx;
-        my $htmx_helpers = PAGI::Simple::View::Helpers::Htmx::get_helpers($self);
-        %helpers = (%helpers, %$htmx_helpers);
-    };
-
-    # Add custom helpers
-    for my $name (keys %{$self->{helpers}}) {
-        $helpers{$name} = $self->{helpers}{$name};
-    }
-
-    # Add role-provided helpers (methods starting with helper_)
-    {
-        no strict 'refs';
-        my $class = ref($self);
-        for my $method (grep { /^helper_/ } keys %{"${class}::"}) {
-            my $helper_name = $method =~ s/^helper_//r;
-            $helpers{$helper_name} = sub { $self->$method(@_) };
-        }
-    }
-
-    return %helpers;
-}
-
 # Internal: Render a layout with content
 sub _render_layout ($self, $content, %vars) {
     my $layout_name = $self->{_layout};
@@ -475,12 +497,8 @@ sub _render_layout ($self, $content, %vars) {
     # Get compiled layout template
     my $template = $self->_get_template($layout_name);
 
-    # Merge variables
-    my %render_vars = (
-        %vars,
-        %layout_vars,
-        $self->_build_helpers(),
-    );
+    # Merge variables (layout vars override page vars)
+    my %render_vars = (%vars, %layout_vars);
 
     return $template->render(\%render_vars);
 }
@@ -520,13 +538,57 @@ Templates use embedded Perl syntax:
     % code               Line-based Perl code
     %= expression        Line-based output
 
+=head2 Variable Access
+
+Template variables are passed via the C<$v> object, which supports both
+method-style and hash-style access:
+
+    # Method syntax (recommended) - throws error on missing keys
+    <%= $v->title %>
+    <%= $v->user->name %>
+
+    # Hash syntax - returns undef for missing keys (faster in tight loops)
+    <%= $v->{title} %>
+    <% for my $item (@{$v->{items}}) { %>
+        <%= $item->{name} %>
+    <% } %>
+
+The method syntax catches typos at runtime - if you access a variable that
+wasn't passed to the template, you get a helpful error listing available
+variables. For performance-critical loops, hash access has slightly lower
+overhead.
+
 Example:
 
     <ul>
-      <% for my $item (@$items) { %>
-        <li><%= $item->name %></li>
+      <% for my $item (@{$v->{items}}) { %>
+        <li><%= $item->{name} %></li>
       <% } %>
     </ul>
+
+=head2 UTF-8 Support
+
+Templates and output are fully UTF-8 aware:
+
+=over 4
+
+=item * Save template files as UTF-8 (they can contain any Unicode characters)
+
+=item * Use C<use utf8;> in your app if it contains UTF-8 string literals
+
+=item * C<< $c->render() >> automatically encodes output to UTF-8 bytes and
+sets C<Content-Type: text/html; charset=utf-8>
+
+=back
+
+Example with Unicode:
+
+    # In app.pl
+    use utf8;
+    $c->render('index', message => 'Hello λ 🔥 中文!');
+
+    # In template (index.html.ep)
+    <p><%= $v->message %> ♥</p>
 
 =head1 LAYOUT SYSTEM
 
@@ -535,16 +597,164 @@ Templates can extend layouts:
     <!-- templates/layouts/default.html.ep -->
     <!DOCTYPE html>
     <html>
-    <head><title><%= $title %></title></head>
+    <head><title><%= $v->title %></title></head>
     <body>
       <%= content() %>
     </body>
     </html>
 
     <!-- templates/index.html.ep -->
-    <% extends('layouts/default', title => 'Home'); %>
+    <% extends('layouts/default') %>
 
-    <h1>Welcome</h1>
+    <h1>Welcome to <%= $v->title %></h1>
+
+Variables passed to C<render()> are available in both the page template
+and the layout via the C<$v> object.
+
+=head1 TEMPLATE HELPERS
+
+The following helpers are available in all templates:
+
+=head2 Layout Helpers
+
+=head3 extends
+
+    <% extends('layouts/default') %>
+
+Specify a layout template to wrap the current template. The layout will
+receive all variables passed to the page template. Should be called at the
+top of a template.
+
+=head3 content
+
+    # In layout - output the main body content
+    <%= content() %>
+
+    # In layout - output a named block
+    <%= content('scripts') %>
+
+Retrieve and output content. With no arguments, returns the main body content
+from the child template. With a name argument, returns the named content block.
+
+=head3 content_for
+
+    # In page template - define a named block (string)
+    <% content_for('scripts', '<script src="app.js"></script>') %>
+
+    # Or use block syntax for multi-line content
+    <% content_for('scripts', sub { %>
+      <script src="app.js"></script>
+      <script>initApp();</script>
+    <% }) %>
+
+Define named content blocks. Useful for injecting content into specific parts
+of a layout (e.g., extra scripts, styles, or sidebar content). Content is
+accumulated, so multiple calls will append. Use C<< <%= content('name') %> >>
+in the layout to output the block.
+
+=head3 block
+
+    # String syntax
+    <% block('sidebar', '<nav>...</nav>') %>
+
+    # Block syntax for multi-line content
+    <% block('sidebar', sub { %>
+      <nav>
+        <a href="/">Home</a>
+        <a href="/about">About</a>
+      </nav>
+    <% }) %>
+
+Set a named content block (replaces any existing content, unlike C<content_for>
+which appends).
+
+=head3 capture
+
+    <% my $card = capture(sub { %>
+      <div class="card">
+        <h2><%= $v->title %></h2>
+        <p><%= $v->body %></p>
+      </div>
+    <% }); %>
+
+    <!-- Use captured content multiple times -->
+    <%= raw($card) %>
+    <%= raw($card) %>
+
+Capture template content into a variable for later reuse. Returns a string
+that can be output with C<raw()> (since it's already rendered HTML).
+
+=head2 Partial/Include Helper
+
+=head3 include
+
+    <%= include('partials/header', title => 'My Page') %>
+    <%= include('todos/_item', todo => $todo) %>
+
+Render a partial template and insert its output. Variables can be passed
+to the partial. Partial filenames can optionally start with underscore
+(Rails convention) - the view will find C<_item.html.ep> if C<item> is
+requested.
+
+=head2 Escaping Helpers
+
+These helpers come from L<Template::EmbeddedPerl> and control HTML escaping:
+
+=head3 raw
+
+    <%= raw('<b>Already safe HTML</b>') %>
+
+Output a string without escaping. Use for trusted HTML content.
+B<Warning:> Never use with user input without sanitization.
+
+=head3 safe
+
+    <%= safe($user_input) %>
+
+Escape HTML entities and mark as safe (won't be double-escaped).
+Converts C<< < >> to C<< &lt; >>, C<< > >> to C<< &gt; >>, etc.
+
+=head3 safe_concat
+
+    <%= safe_concat('<div>', $content, '</div>') %>
+
+Concatenate multiple strings, escaping each one, and return as safe.
+
+=head2 URL/String Helpers
+
+=head3 url_encode
+
+    <a href="/search?q=<%= url_encode($query) %>">Search</a>
+
+URL-encode a string for use in query parameters.
+
+=head3 escape_javascript
+
+    <script>var name = '<%= escape_javascript($name) %>';</script>
+
+Escape a string for safe inclusion in JavaScript. Escapes quotes,
+backslashes, and newlines.
+
+=head3 trim
+
+    <%= trim('  hello  ') %>
+
+Remove leading and trailing whitespace from a string.
+
+=head3 mtrim
+
+    <%= mtrim("  line1  \n  line2  ") %>
+
+Trim whitespace from each line in a multiline string.
+
+=head2 Routing Helper
+
+=head3 route
+
+    <a href="<%= route('user_profile', id => 42) %>">Profile</a>
+
+Generate a URL for a named route. Only available if the view is connected
+to a PAGI::Simple app with named routes configured.
 
 =head1 SEE ALSO
 

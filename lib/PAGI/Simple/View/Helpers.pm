@@ -107,10 +107,13 @@ sub escape ($text) {
 
     my $html = raw($html_string);
 
-Mark a string as raw HTML that should not be escaped.
-Use this for trusted HTML content.
+Returns a string as a safe string object B<without escaping>. Use this
+for trusted HTML content that you want to output without modification.
+
+    <%= raw '<a href="http://example.com">Example</a>' %>
 
 B<Warning:> Never use this with user-provided input without sanitization.
+This bypasses all escaping and outputs the string exactly as provided.
 
 =cut
 
@@ -122,13 +125,19 @@ sub raw ($html) {
 
     my $safe = safe($string);
 
-Mark a string as already escaped/safe. This is an alias for raw()
-but makes intent clearer when the string has already been escaped.
+Returns a string as a safe HTML B<escaped> string object that will not
+be escaped again. This escapes the string first (converting < to &lt;, etc.)
+and then marks the result as safe so it won't be double-escaped.
+
+    <%= safe '<script>alert(1)</script>' %>
+    # Outputs: &lt;script&gt;alert(1)&lt;/script&gt;
+
+This is different from C<raw()> which does NOT escape the input.
 
 =cut
 
 sub safe ($string) {
-    return raw($string);
+    return escape($string);
 }
 
 =head2 is_safe

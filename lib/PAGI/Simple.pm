@@ -308,11 +308,55 @@ Options:
 
 =item * C<name> - Application name (default: 'PAGI::Simple')
 
+=item * C<views> - Configure template rendering. Can be:
+
+=over 4
+
+=item * A string (directory path): C<< views => 'templates' >>
+
+=item * A hashref with options: C<< views => { directory => 'templates', prepend => '...' } >>
+
+=item * C<undef> to use the default C<./templates> directory
+
 =back
+
+Relative paths are resolved relative to the directory containing the file
+that creates the PAGI::Simple app. See L</views> for available options.
+
+=back
+
+Examples:
+
+    # Simple app with views
+    my $app = PAGI::Simple->new(
+        name  => 'My App',
+        views => 'templates',
+    );
+
+    # With view options
+    my $app = PAGI::Simple->new(
+        name  => 'My App',
+        views => {
+            directory => 'templates',
+            prepend   => 'use experimental "signatures";',
+            cache     => 0,
+        },
+    );
+
+    # Default templates directory (./templates)
+    my $app = PAGI::Simple->new(
+        views => undef,
+    );
 
 =cut
 
 sub new ($class, %args) {
+    # Capture caller's file location for default template directory
+    my ($caller_file) = (caller(0))[1];
+    require File::Basename;
+    require File::Spec;
+    my $caller_dir = File::Basename::dirname(File::Spec->rel2abs($caller_file));
+
     my $self = bless {
         name       => $args{name} // 'PAGI::Simple',
         router     => PAGI::Simple::Router->new,
@@ -329,7 +373,61 @@ sub new ($class, %args) {
         _prefix          => '',           # Current route group prefix
         _group_middleware => [],          # Current group middleware stack
         _loop            => undef,        # Event loop (set when server starts)
+        _view            => undef,        # View instance for template rendering
+        _view_config     => undef,        # Deferred view configuration
+        _caller_dir      => $caller_dir,  # Directory of the file creating the app
+        model_namespace  => $args{model_namespace},   # Model auto-discovery namespace
+        model_config     => $args{model_config} // {},  # Per-model configuration
     }, $class;
+
+    # Handle views configuration in constructor
+    if (exists $args{views}) {
+        $self->_configure_views($args{views});
+    }
+
+    return $self;
+}
+
+# Internal: Configure views from constructor or views() method
+sub _configure_views ($self, $config) {
+    require PAGI::Simple::View;
+
+    my ($template_dir, %options);
+
+    if (!defined $config) {
+        # views => undef means use default directory (./templates)
+        $template_dir = File::Spec->catdir($self->{_caller_dir}, 'templates');
+    }
+    elsif (!ref($config)) {
+        # Shorthand: views => './templates' or views => 'templates'
+        $template_dir = $config;
+        # Make relative paths relative to caller dir
+        unless (File::Spec->file_name_is_absolute($template_dir)) {
+            $template_dir = File::Spec->catdir($self->{_caller_dir}, $template_dir);
+        }
+    }
+    elsif (ref($config) eq 'HASH') {
+        # Full syntax: views => { directory => './templates', prepend => '...' }
+        %options = %$config;
+        $template_dir = delete $options{directory};
+
+        # Default directory is ./templates relative to caller
+        $template_dir //= 'templates';
+
+        # Make relative paths relative to caller dir
+        unless (File::Spec->file_name_is_absolute($template_dir)) {
+            $template_dir = File::Spec->catdir($self->{_caller_dir}, $template_dir);
+        }
+    }
+    else {
+        die "Invalid views configuration: expected string or hashref";
+    }
+
+    $self->{_view} = PAGI::Simple::View->new(
+        template_dir => $template_dir,
+        app          => $self,
+        %options,
+    );
 
     return $self;
 }
@@ -370,6 +468,94 @@ like database connections that are initialized at startup.
 
 sub stash ($self) {
     return $self->{stash};
+}
+
+=head2 views
+
+    # Simple form - directory relative to app file
+    $app->views('templates');
+
+    # With options
+    $app->views('templates', prepend => '...', cache => 0);
+
+    # Absolute path
+    $app->views('/var/www/templates');
+
+Configure template rendering for the application. Creates a PAGI::Simple::View
+instance that can be used by $c->render() in route handlers.
+
+Relative paths are resolved relative to the directory containing the file
+that created the PAGI::Simple app (not the current working directory).
+
+This method can also be called to override views configured in the constructor.
+
+Options:
+
+=over 4
+
+=item * auto_escape - HTML escape by default (default: 1)
+
+=item * extension - Template file extension (default: '.html.ep')
+
+=item * cache - Cache compiled templates in memory (default: 1)
+
+=item * helpers - Hashref of custom template helpers
+
+=item * roles - Arrayref of role names to compose into view
+
+=item * development - Development mode (no cache, verbose errors)
+
+=item * prepend - Extra Perl code added at start of each template subroutine
+
+=item * preamble - Package-level Perl code (use statements). To enable
+subroutine signatures in templates: C<< preamble => 'use experimental "signatures";' >>
+
+=back
+
+Returns $app for chaining.
+
+=cut
+
+sub views ($self, $template_dir = undef, @args) {
+    # Build config hashref for _configure_views
+    my $config;
+
+    # Handle backward compatibility: views($dir, \%hashref)
+    my %options;
+    if (@args == 1 && ref($args[0]) eq 'HASH') {
+        %options = %{$args[0]};
+    }
+    elsif (@args) {
+        %options = @args;
+    }
+
+    if (defined $template_dir && !%options) {
+        # Simple form: views('templates')
+        $config = $template_dir;
+    }
+    elsif (defined $template_dir) {
+        # With options: views('templates', prepend => '...') or views('templates', \%opts)
+        $config = { directory => $template_dir, %options };
+    }
+    else {
+        # No args: views() - use default directory
+        $config = undef;
+    }
+
+    return $self->_configure_views($config);
+}
+
+=head2 view
+
+    my $view = $app->view;
+
+Returns the PAGI::Simple::View instance configured by views().
+Returns undef if views() has not been called.
+
+=cut
+
+sub view ($self) {
+    return $self->{_view};
 }
 
 =head2 loop
