@@ -18,13 +18,15 @@
         <% my $pct = $total > 0 ? int(($votes / $total) * 100) : 0; %>
         <div class="option-bar">
             <% if ($show_vote) { %>
-            <button class="btn btn-primary btn-sm option-label"
-                    <%= hx_post("/polls/$id/vote",
-                                vals => { option => $opt },
-                                target => "#poll-$id",
-                                swap => 'outerHTML') %>>
-                <%= $opt %>
-            </button>
+            <form style="display:inline; margin:0;">
+                <input type="hidden" name="option" value="<%= $opt %>">
+                <button type="submit" class="btn btn-primary btn-sm option-label"
+                        <%= hx_post("/polls/$id/vote",
+                                    target => "#poll-$id",
+                                    swap => 'outerHTML') %>>
+                    <%= $opt %>
+                </button>
+            </form>
             <% } else { %>
             <span class="option-label"><%= $opt %></span>
             <% } %>
