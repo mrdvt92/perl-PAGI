@@ -774,7 +774,7 @@
    {
       "category" : "functional",
       "description" : "Step 19: Development mode - no template caching",
-      "passes" : false,
+      "passes" : true,
       "steps" : [
          "Step 1: Create view with development => 1",
          "Step 2: Render template",
@@ -786,7 +786,7 @@
    {
       "category" : "functional",
       "description" : "Step 19: Development mode - detailed error messages",
-      "passes" : false,
+      "passes" : true,
       "steps" : [
          "Step 1: Create view with development => 1",
          "Step 2: Create template with syntax error",
@@ -798,7 +798,7 @@
    {
       "category" : "functional",
       "description" : "Step 19: Missing template gives clear error",
-      "passes" : false,
+      "passes" : true,
       "steps" : [
          "Step 1: Try to render non-existent template",
          "Step 2: Verify error message mentions template name",

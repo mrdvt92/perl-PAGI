@@ -327,11 +327,9 @@ sub _get_template ($self, $name) {
     }
 
     # Find the template file
-    my $path = $self->_find_template($name);
+    my ($path, $searched) = $self->_find_template($name);
     unless ($path && -f $path) {
-        my $msg = "Template not found: $name";
-        $msg .= " (looked in $self->{template_dir})" if $self->{development};
-        croak($msg);
+        $self->_template_not_found_error($name, $searched);
     }
 
     # Read template source
@@ -339,8 +337,8 @@ sub _get_template ($self, $name) {
     my $source = do { local $/; <$fh> };
     close $fh;
 
-    # Compile the template
-    my $compiled = $self->_compile_template($source, $name);
+    # Compile the template (with detailed errors)
+    my $compiled = $self->_compile_template($source, $name, $path);
 
     # Cache if enabled
     if ($self->{cache}) {
@@ -350,8 +348,76 @@ sub _get_template ($self, $name) {
     return $compiled;
 }
 
+# Internal: Generate helpful error for missing templates
+sub _template_not_found_error ($self, $name, $searched) {
+    my @msg = ("Template not found: '$name'");
+
+    push @msg, "";
+    push @msg, "Searched paths:";
+    for my $path (@{$searched // []}) {
+        push @msg, "  - $path";
+    }
+
+    push @msg, "";
+    push @msg, "Template directory: $self->{template_dir}";
+    push @msg, "Extension: $self->{extension}";
+
+    # Check if template_dir exists
+    unless (-d $self->{template_dir}) {
+        push @msg, "";
+        push @msg, "WARNING: Template directory does not exist!";
+    }
+
+    # Suggest similar templates if possible
+    if (-d $self->{template_dir}) {
+        my @similar = $self->_find_similar_templates($name);
+        if (@similar) {
+            push @msg, "";
+            push @msg, "Did you mean:";
+            my $max = @similar > 5 ? 5 : @similar;
+            push @msg, "  - $_" for @similar[0..$max-1];
+        }
+    }
+
+    croak(join("\n", @msg));
+}
+
+# Internal: Find similar template names for suggestions
+sub _find_similar_templates ($self, $name) {
+    my $dir = $self->{template_dir};
+    my $ext = $self->{extension};
+    my @templates;
+
+    # Simple approach: list templates and find partial matches
+    return () unless -d $dir;
+
+    require File::Find;
+    File::Find::find({
+        wanted => sub {
+            return unless -f && /\Q$ext\E$/;
+            my $tpl = $File::Find::name;
+            $tpl =~ s/^\Q$dir\E\/?//;
+            $tpl =~ s/\Q$ext\E$//;
+            push @templates, $tpl;
+        },
+        no_chdir => 1,
+    }, $dir);
+
+    # Find templates that contain parts of the requested name
+    my @parts = split(/[\/\\]/, $name);
+    my $base = $parts[-1];
+    $base =~ s/^_//;  # Remove leading underscore for matching
+
+    my @matches = grep {
+        my $t = $_;
+        $t =~ /\Q$base\E/i || $name =~ /\Q$t\E/i
+    } @templates;
+
+    return @matches;
+}
+
 # Internal: Compile a template string
-sub _compile_template ($self, $source, $name = 'string') {
+sub _compile_template ($self, $source, $name = 'string', $path = undef) {
     # Build prepend: our internal code + user's custom prepend
     my $prepend = 'my $v = PAGI::Simple::View::Vars->new(shift);';
     $prepend .= ' ' . $self->{prepend} if $self->{prepend};
@@ -364,7 +430,63 @@ sub _compile_template ($self, $source, $name = 'string') {
         helpers     => $self->_get_all_helpers(),
     );
 
-    return $engine->from_string($source);
+    # Compile with error handling for better messages
+    my $compiled;
+    eval {
+        $compiled = $engine->from_string($source);
+    };
+    if ($@) {
+        $self->_template_compile_error($name, $path, $source, $@);
+    }
+
+    return $compiled;
+}
+
+# Internal: Generate helpful error for template compilation failures
+sub _template_compile_error ($self, $name, $path, $source, $error) {
+    my @msg = ("Template compilation error in '$name'");
+
+    if ($path) {
+        push @msg, "File: $path";
+    }
+    push @msg, "";
+
+    # Try to extract line number from error
+    my $error_line;
+    if ($error =~ /at .+ line (\d+)/) {
+        $error_line = $1;
+    }
+
+    push @msg, "Error: $error";
+
+    # Show source context if we have a line number
+    if ($error_line && $source) {
+        push @msg, "";
+        push @msg, "Source context:";
+        my @lines = split /\n/, $source;
+        my $start = ($error_line > 3) ? $error_line - 3 : 1;
+        my $end = ($error_line + 3 <= @lines) ? $error_line + 3 : scalar(@lines);
+
+        for my $i ($start..$end) {
+            my $line = $lines[$i - 1] // '';
+            my $marker = ($i == $error_line) ? ' >>>' : '    ';
+            push @msg, sprintf("%s %4d: %s", $marker, $i, $line);
+        }
+    }
+
+    # In development mode, show full template source
+    if ($self->{development} && $source) {
+        push @msg, "";
+        push @msg, "Full template source:";
+        push @msg, "-" x 60;
+        my @lines = split /\n/, $source;
+        for my $i (1..@lines) {
+            push @msg, sprintf("%4d: %s", $i, $lines[$i - 1]);
+        }
+        push @msg, "-" x 60;
+    }
+
+    croak(join("\n", @msg));
 }
 
 # Internal: Get all helpers (default + custom)
@@ -499,13 +621,16 @@ sub _get_engine_helpers ($self) {
 }
 
 # Internal: Find a template file by name
+# Returns ($path, \@searched_paths) in list context, $path in scalar context
 sub _find_template ($self, $name) {
     my $ext = $self->{extension};
     my $dir = $self->{template_dir};
+    my @searched;
 
     # Try the name as-is
     my $path = File::Spec->catfile($dir, "$name$ext");
-    return $path if -f $path;
+    push @searched, $path;
+    return wantarray ? ($path, \@searched) : $path if -f $path;
 
     # If name contains '/', try adding underscore prefix to last segment (partial convention)
     if ($name =~ m{/}) {
@@ -514,11 +639,12 @@ sub _find_template ($self, $name) {
         unless ($last =~ /^_/) {
             my $partial_name = join('/', @parts, "_$last");
             my $partial_path = File::Spec->catfile($dir, "$partial_name$ext");
-            return $partial_path if -f $partial_path;
+            push @searched, $partial_path;
+            return wantarray ? ($partial_path, \@searched) : $partial_path if -f $partial_path;
         }
     }
 
-    return undef;
+    return wantarray ? (undef, \@searched) : undef;
 }
 
 # Internal: Render a layout with content
