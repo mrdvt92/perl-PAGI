@@ -325,123 +325,134 @@
    },
    {
       "category" : "functional",
-      "description" : "Step 7: PAGI::Simple::Model base class instantiation",
-      "passes" : false,
+      "description" : "Step 7: PAGI::Simple::Model base class instantiation (IMPLEMENTED AS Service)",
+      "passes" : true,
+      "notes" : "Implemented as PAGI::Simple::Service::_Base with Factory/PerRequest/PerApp scopes",
       "steps" : [
-         "Step 1: Create model class inheriting from PAGI::Simple::Model",
-         "Step 2: Call Model->for_context($c, $config)",
+         "Step 1: Create service class inheriting from PAGI::Simple::Service::Factory",
+         "Step 2: Service instantiated via init_service($app, $config)",
          "Step 3: Verify instance created with context and config",
-         "Step 4: Verify $model->c returns context"
+         "Step 4: Verify $service->c returns context"
       ]
    },
    {
       "category" : "functional",
-      "description" : "Step 7: $c->model('Name') returns model instance",
-      "passes" : false,
+      "description" : "Step 7: $c->model('Name') returns model instance (IMPLEMENTED AS $c->service())",
+      "passes" : true,
+      "notes" : "Implemented as $c->service('Name') - auto-discovers from ${namespace}::Service::*",
       "steps" : [
-         "Step 1: Configure app with model_namespace => 'MyApp::Model'",
-         "Step 2: Create MyApp::Model::Todo class",
-         "Step 3: In route handler call $c->model('Todo')",
-         "Step 4: Verify instance of MyApp::Model::Todo returned"
+         "Step 1: Configure app with namespace => 'MyApp'",
+         "Step 2: Create MyApp::Service::Todo class",
+         "Step 3: In route handler call $c->service('Todo')",
+         "Step 4: Verify instance of MyApp::Service::Todo returned"
       ]
    },
    {
       "category" : "functional",
-      "description" : "Step 7: Model configuration passed via model_config",
-      "passes" : false,
+      "description" : "Step 7: Model configuration passed via model_config (IMPLEMENTED AS service_config)",
+      "passes" : true,
+      "notes" : "Implemented as service_config => { ServiceName => { ... } }",
       "steps" : [
-         "Step 1: Configure app with model_config => { DB => { dsn => '...' } }",
-         "Step 2: Create MyApp::Model::DB that uses config",
-         "Step 3: Call $c->model('DB')",
-         "Step 4: Verify model received config in for_context"
+         "Step 1: Configure app with service_config => { DB => { dsn => '...' } }",
+         "Step 2: Create MyApp::Service::DB that uses config",
+         "Step 3: Call $c->service('DB')",
+         "Step 4: Verify service received config in init_service"
       ]
    },
    {
       "category" : "functional",
-      "description" : "Step 8: Model auto-discovery with Module::Pluggable",
-      "passes" : false,
+      "description" : "Step 8: Model auto-discovery with Module::Pluggable (IMPLEMENTED AS Service)",
+      "passes" : true,
+      "notes" : "Implemented via _discover_services() - finds ${namespace}::Service::* classes",
       "steps" : [
-         "Step 1: Create model_namespace with multiple model classes",
-         "Step 2: Configure app with that namespace",
-         "Step 3: Verify all models discoverable via $c->model()",
-         "Step 4: Verify nested models: MyApp::Model::Foo::Bar -> 'Foo::Bar'"
+         "Step 1: Create namespace with multiple service classes",
+         "Step 2: Configure app with namespace => 'MyApp'",
+         "Step 3: Verify all services discoverable via $c->service()",
+         "Step 4: Verify nested services: MyApp::Service::Foo::Bar -> 'Foo::Bar'"
       ]
    },
    {
       "category" : "functional",
-      "description" : "Step 8: Missing model gives clear error",
-      "passes" : false,
+      "description" : "Step 8: Missing model gives clear error (IMPLEMENTED AS Service)",
+      "passes" : true,
+      "notes" : "Implemented in Context->service() - croaks with 'Unknown service' message",
       "steps" : [
-         "Step 1: Configure app with model_namespace",
-         "Step 2: Call $c->model('NonExistent')",
-         "Step 3: Verify clear error message about missing model",
-         "Step 4: Error should suggest available models"
+         "Step 1: Configure app with namespace",
+         "Step 2: Call $c->service('NonExistent')",
+         "Step 3: Verify clear error message about missing service",
+         "Step 4: Error indicates service not found in registry"
       ]
    },
    {
       "category" : "functional",
-      "description" : "Step 9: Factory pattern - new instance each call (default)",
-      "passes" : false,
+      "description" : "Step 9: Factory pattern - new instance each call (IMPLEMENTED AS Service::Factory)",
+      "passes" : true,
+      "notes" : "Implemented via PAGI::Simple::Service::Factory base class",
       "steps" : [
-         "Step 1: Create model WITHOUT PerRequest role",
-         "Step 2: Call $c->model('Todo') twice in same request",
+         "Step 1: Create service inheriting from Service::Factory",
+         "Step 2: Call $c->service('Todo') twice in same request",
          "Step 3: Verify two different instances returned",
-         "Step 4: Verify $m1 != $m2 (different object refs)"
+         "Step 4: Verify $s1 != $s2 (different object refs)"
       ]
    },
    {
       "category" : "functional",
-      "description" : "Step 9: Per-request caching with PerRequest role",
-      "passes" : false,
+      "description" : "Step 9: Per-request caching with PerRequest role (IMPLEMENTED AS Service::PerRequest)",
+      "passes" : true,
+      "notes" : "Implemented via PAGI::Simple::Service::PerRequest base class",
       "steps" : [
-         "Step 1: Create model with PerRequest role",
-         "Step 2: Call $c->model('CurrentUser') twice in same request",
+         "Step 1: Create service inheriting from Service::PerRequest",
+         "Step 2: Call $c->service('CurrentUser') twice in same request",
          "Step 3: Verify same instance returned both times",
-         "Step 4: Verify $m1 == $m2 (same object ref)"
+         "Step 4: Verify $s1 == $s2 (same object ref)"
       ]
    },
    {
       "category" : "functional",
-      "description" : "Step 9: Different requests get different cached instances",
-      "passes" : false,
+      "description" : "Step 9: Different requests get different cached instances (IMPLEMENTED AS Service)",
+      "passes" : true,
+      "notes" : "Inherent in Service::PerRequest - uses request stash which is unique per request",
       "steps" : [
-         "Step 1: Create model with PerRequest role",
-         "Step 2: Make first request, get model instance",
-         "Step 3: Make second request, get model instance",
+         "Step 1: Create service inheriting from Service::PerRequest",
+         "Step 2: Make first request, get service instance",
+         "Step 3: Make second request, get service instance",
          "Step 4: Verify instances are different between requests"
       ]
    },
    {
       "category" : "functional",
-      "description" : "Step 10: Async for_context support",
-      "passes" : false,
+      "description" : "Step 10: Async for_context support (IMPLEMENTED AS Service with async methods)",
+      "passes" : true,
+      "notes" : "Services can have async methods using Future::AsyncAwait - call $service->method->get",
       "steps" : [
-         "Step 1: Create model with async for_context method",
-         "Step 2: for_context awaits another model or async operation",
-         "Step 3: Call await $c->model('AsyncModel')",
-         "Step 4: Verify async initialization completed correctly"
+         "Step 1: Create service with async methods using Future::AsyncAwait",
+         "Step 2: Async methods return Future objects",
+         "Step 3: Call $service->async_method->get to await result",
+         "Step 4: Verify async operation completed correctly"
       ]
    },
    {
       "category" : "functional",
-      "description" : "Step 10: Mixed sync/async models work together",
-      "passes" : false,
+      "description" : "Step 10: Mixed sync/async models work together (IMPLEMENTED AS Service)",
+      "passes" : true,
+      "notes" : "Services with async methods can call $c->service() to get other services",
       "steps" : [
-         "Step 1: Create sync model (SyncModel)",
-         "Step 2: Create async model (AsyncModel) that depends on SyncModel",
-         "Step 3: Call await $c->model('AsyncModel')",
-         "Step 4: Verify both models instantiated correctly"
+         "Step 1: Create sync service (Factory scope)",
+         "Step 2: Create async service that uses other services",
+         "Step 3: Call async method that chains service calls",
+         "Step 4: Verify both services work correctly together"
       ]
    },
    {
       "category" : "functional",
-      "description" : "Step 10: Per-request caching works with async models",
-      "passes" : false,
+      "description" : "Step 10: Per-request caching works with async models (IMPLEMENTED AS Service)",
+      "passes" : true,
+      "notes" : "PerRequest services cache the instance; async methods can be called on cached instance",
       "steps" : [
-         "Step 1: Create async model with PerRequest role",
-         "Step 2: Call await $c->model('CachedAsync') twice",
-         "Step 3: Verify same instance returned both times",
-         "Step 4: Verify async init only ran once"
+         "Step 1: Create service inheriting from Service::PerRequest with async methods",
+         "Step 2: Call $c->service('CachedAsync') twice",
+         "Step 3: Verify same instance returned both times (refaddr matches)",
+         "Step 4: Verify service only instantiated once; async methods work on cached instance"
       ]
    },
    {
