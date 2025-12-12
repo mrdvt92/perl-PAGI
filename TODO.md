@@ -21,6 +21,12 @@
   - Implemented as `PAGI::Simple::StructuredParams`
   - See `perldoc PAGI::Simple::StructuredParams` for full documentation
   - Usage: `(await $c->structured_body)->namespace('x')->permitted(...)->to_hash`
+- Controller pattern (`$c->controller` or similar)
+  - Group related routes into controller classes
+  - Consider: `$app->controller('/orders' => 'MyApp::Controller::Orders')`
+  - Or: `$c->controller->action_name` for current controller context
+  - Look at: Mojolicious controllers, Catalyst controllers, Rails controllers
+  - Benefits: better organization for larger apps, reusable action logic, before/after filters per controller
 
 ## Mount Enhancements (Future)
 
