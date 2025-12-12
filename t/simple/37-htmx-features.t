@@ -153,16 +153,26 @@ subtest 'htmx_prompt() accessor' => sub {
 };
 
 # ============================================================================
-# Test 6: htmx_boosted() accessor
+# Test 6: htmx_boosted() and is_boosted() boolean detection
 # ============================================================================
-subtest 'htmx_boosted() accessor' => sub {
+subtest 'htmx_boosted() and is_boosted() boolean detection' => sub {
+    # Without HX-Boosted header
     my $scope1 = mock_scope(headers => []);
     my $req1 = PAGI::Simple::Request->new($scope1);
-    ok !$req1->htmx_boosted, 'htmx_boosted returns false when not boosted';
+    ok !$req1->htmx_boosted, 'htmx_boosted returns false without HX-Boosted header';
+    ok !$req1->is_boosted, 'is_boosted returns false without HX-Boosted header';
 
+    # With HX-Boosted: true header
     my $scope2 = mock_scope(headers => [['HX-Boosted', 'true']]);
     my $req2 = PAGI::Simple::Request->new($scope2);
-    ok $req2->htmx_boosted, 'htmx_boosted returns true when boosted';
+    ok $req2->htmx_boosted, 'htmx_boosted returns true with HX-Boosted: true header';
+    ok $req2->is_boosted, 'is_boosted returns true with HX-Boosted: true header';
+
+    # With HX-Boosted: false header (should be false)
+    my $scope3 = mock_scope(headers => [['HX-Boosted', 'false']]);
+    my $req3 = PAGI::Simple::Request->new($scope3);
+    ok !$req3->htmx_boosted, 'htmx_boosted returns false with HX-Boosted: false header';
+    ok !$req3->is_boosted, 'is_boosted returns false with HX-Boosted: false header';
 };
 
 # ============================================================================
@@ -531,6 +541,68 @@ subtest 'Force layout off for browser request' => sub {
     unlike $body, qr/<!DOCTYPE html>/, 'No layout when forced off';
     unlike $body, qr/<html>/, 'No html tag when layout forced off';
     like $body, qr/<h1>NoLayout<\/h1>/, 'Still has content';
+};
+
+# ============================================================================
+# Test 20: Boosted htmx request gets full layout (hx-boost navigation)
+# ============================================================================
+subtest 'Boosted htmx request gets full layout' => sub {
+    my $app = PAGI::Simple->new(name => 'TestApp');
+    $app->views("$tempdir/templates", { cache => 0 });
+
+    my ($send, $responses) = mock_send();
+    # Boosted request has both HX-Request and HX-Boosted headers
+    my $scope = mock_scope(headers => [
+        ['HX-Request', 'true'],
+        ['HX-Boosted', 'true'],
+    ]);
+    my $receive = mock_receive();
+
+    my $c = PAGI::Simple::Context->new(
+        app     => $app,
+        scope   => $scope,
+        receive => $receive,
+        send    => $send,
+    );
+
+    # Render page - boosted request should get full layout
+    $c->render('page', title => 'Boosted', message => 'Navigation')->get;
+
+    # Should include layout (boosted requests expect full page for body swap)
+    my $body = $responses->[1]{body};
+    like $body, qr/<!DOCTYPE html>/, 'Boosted htmx gets DOCTYPE';
+    like $body, qr/<html>/, 'Boosted htmx gets html tag';
+    like $body, qr/<body>/, 'Boosted htmx gets body tag';
+    like $body, qr/<h1>Boosted<\/h1>/, 'Boosted htmx gets content';
+};
+
+# ============================================================================
+# Test 21: Regular htmx request still skips layout
+# ============================================================================
+subtest 'Regular htmx request still skips layout' => sub {
+    my $app = PAGI::Simple->new(name => 'TestApp');
+    $app->views("$tempdir/templates", { cache => 0 });
+
+    my ($send, $responses) = mock_send();
+    # Regular htmx request (no HX-Boosted header)
+    my $scope = mock_scope(headers => [['HX-Request', 'true']]);
+    my $receive = mock_receive();
+
+    my $c = PAGI::Simple::Context->new(
+        app     => $app,
+        scope   => $scope,
+        receive => $receive,
+        send    => $send,
+    );
+
+    # Render page - regular htmx should skip layout
+    $c->render('page', title => 'Fragment', message => 'Only')->get;
+
+    # Should NOT include layout
+    my $body = $responses->[1]{body};
+    unlike $body, qr/<!DOCTYPE html>/, 'Regular htmx does NOT get DOCTYPE';
+    unlike $body, qr/<html>/, 'Regular htmx does NOT get html tag';
+    like $body, qr/<h1>Fragment<\/h1>/, 'Regular htmx gets content only';
 };
 
 done_testing;

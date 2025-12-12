@@ -12,6 +12,7 @@ use File::Spec;
 use Template::EmbeddedPerl;
 use PAGI::Simple::View::Helpers;
 use PAGI::Simple::View::Vars;
+use PAGI::Simple::View::RenderContext;
 
 =head1 NAME
 
@@ -92,12 +93,9 @@ sub new ($class, %args) {
         roles        => $args{roles}        // [],
         prepend      => $args{prepend}      // '',   # Extra code for template sub
         preamble     => $args{preamble}     // '',   # Package-level code (use statements)
-        _cache       => {},                # Template cache
-        _context     => undef,             # Current request context
-        _blocks      => {},                # Named content blocks
-        _layout      => undef,             # Current layout
-        _layout_vars => {},                # Variables to pass to layout
+        _cache       => {},                # Template cache (shared)
         _app         => $args{app},        # Reference to PAGI::Simple app
+        # Note: Per-render state (_blocks, _layout, _context) is now in RenderContext
     }, $class;
 
     # Disable cache in development mode
@@ -196,52 +194,26 @@ This is useful when:
 
 =cut
 
-# Package variable to track current view during rendering
+# Package variable to track current render context during rendering
 # This is needed because Template::EmbeddedPerl compiles helpers at template
-# compile time, but we need them to access the current view at render time.
-our $_current_view;
+# compile time, but we need them to access the current context at render time.
+our $_current_render_context;
 
 sub render ($self, $template_name, %vars) {
-    # Extract layout control option (if provided)
-    my $layout_override = delete $vars{layout};
+    # Extract context from vars
+    my $context = delete $vars{_context};
 
-    # Store any request context
-    local $self->{_context} = $vars{_context} // $self->{_context};
-    local $self->{_blocks} = {};
-    local $self->{_layout} = undef;
-    local $self->{_layout_vars} = {};
+    # Create a fresh RenderContext for this render
+    my $render_ctx = PAGI::Simple::View::RenderContext->new(
+        view    => $self,
+        context => $context,
+    );
 
-    # Set current view for helpers to access
-    local $_current_view = $self;
+    # Set current render context for helpers to access
+    local $_current_render_context = $render_ctx;
 
-    # Get compiled template
-    my $template = $self->_get_template($template_name);
-
-    # Render the template - pass vars hashref as first arg (accessed as $v)
-    my $output = $template->render(\%vars);
-
-    # Determine whether to use layout:
-    # - layout => 1: force layout ON
-    # - layout => 0: force layout OFF
-    # - layout not specified: auto-detect (skip for htmx, use for browser)
-    my $use_layout;
-    if (defined $layout_override) {
-        $use_layout = $layout_override ? 1 : 0;
-    } else {
-        # Auto-detect: skip layout for htmx requests
-        my $is_htmx = 0;
-        if ($self->{_context} && $self->{_context}->can('req')) {
-            $is_htmx = $self->{_context}->req->is_htmx;
-        }
-        $use_layout = !$is_htmx;
-    }
-
-    # If a layout was set and we should use it, render it
-    if ($self->{_layout} && $use_layout) {
-        $output = $self->_render_layout($output, %vars);
-    }
-
-    return $output;
+    # Delegate to RenderContext
+    return $render_ctx->render($template_name, %vars);
 }
 
 =head2 render_string
@@ -254,16 +226,17 @@ This is useful for testing or dynamic templates.
 =cut
 
 sub render_string ($self, $template_string, %vars) {
-    local $self->{_context} = $vars{_context} // $self->{_context};
-    local $self->{_blocks} = {};
-    local $self->{_layout} = undef;
-    local $self->{_layout_vars} = {};
-    local $_current_view = $self;
+    my $context = delete $vars{_context};
 
-    # Compile the template string
+    my $render_ctx = PAGI::Simple::View::RenderContext->new(
+        view    => $self,
+        context => $context,
+    );
+
+    local $_current_render_context = $render_ctx;
+
+    # Compile and render the template string
     my $template = $self->_compile_template($template_string, 'string');
-
-    # Render with vars hashref as first arg (accessed as $v)
     return $template->render(\%vars);
 }
 
@@ -277,16 +250,17 @@ Useful for explicitly returning partials.
 =cut
 
 sub render_fragment ($self, $template_name, %vars) {
-    local $self->{_context} = $vars{_context} // $self->{_context};
-    local $self->{_blocks} = {};
-    local $self->{_layout} = undef;
-    local $self->{_layout_vars} = {};
-    local $_current_view = $self;
+    my $context = delete $vars{_context};
 
-    my $template = $self->_get_template($template_name);
+    my $render_ctx = PAGI::Simple::View::RenderContext->new(
+        view    => $self,
+        context => $context,
+    );
 
-    # Always skip layout for fragments
-    return $template->render(\%vars);
+    local $_current_render_context = $render_ctx;
+
+    # Delegate to RenderContext's fragment method
+    return $render_ctx->render_fragment($template_name, %vars);
 }
 
 =head2 include
@@ -299,10 +273,13 @@ or not - the view will find the file either way.
 =cut
 
 sub include ($self, $partial_name, %vars) {
+    # Delegate to RenderContext if we're in a render, otherwise render directly
+    if ($_current_render_context) {
+        return $_current_render_context->include($partial_name, %vars);
+    }
+    # Fallback for direct calls outside render context
     my $template = $self->_get_template($partial_name);
-    # Render with vars hashref as first arg (accessed as $v)
     my $html = $template->render(\%vars);
-    # Return as SafeString (using raw, not new) so it won't be double-escaped
     return Template::EmbeddedPerl::SafeString::raw($html);
 }
 
@@ -533,8 +510,9 @@ sub _get_all_helpers ($self) {
             my $helper_name = $method =~ s/^helper_//r;
             $helpers{$helper_name} = sub {
                 shift;  # Discard Template::EmbeddedPerl instance
-                my $view = $_current_view or die "No current view set during rendering";
-                return $view->$method(@_);
+                my $ctx = $_current_render_context or die "No render context set during rendering";
+                # Call the helper method on the view, passing the render context
+                return $ctx->view->$method($ctx, @_);
             };
         }
     }
@@ -544,8 +522,8 @@ sub _get_all_helpers ($self) {
 
 # Internal: Get helpers for Template::EmbeddedPerl engine
 # Note: Template::EmbeddedPerl passes itself as the first arg to helpers
-# IMPORTANT: These helpers must use $_current_view instead of $self because
-# templates may be compiled once but rendered with different view instances.
+# IMPORTANT: These helpers must use $_current_render_context instead of $self because
+# templates may be compiled once but rendered with different contexts.
 sub _get_engine_helpers ($self) {
     return {
         # Include partial
@@ -553,67 +531,76 @@ sub _get_engine_helpers ($self) {
         include => sub {
             my $ep = shift;  # Template::EmbeddedPerl instance (for raw())
             my ($name, %vars) = @_;
-            my $view = $_current_view or die "No current view set during rendering";
-            my $html = $view->include($name, %vars);
+            my $ctx = $_current_render_context or die "No render context set during rendering";
+            my $html = $ctx->include($name, %vars);
             return $ep->raw($html);  # Return as safe string
         },
         # Layout helpers
         extends => sub {
             shift;  # Discard Template::EmbeddedPerl instance
             my ($layout, %vars) = @_;
-            my $view = $_current_view or die "No current view set during rendering";
-            $view->{_layout} = $layout;
-            $view->{_layout_vars} = \%vars;
+            my $ctx = $_current_render_context or die "No render context set during rendering";
+            $ctx->set_layout($layout, %vars);
+            return '';
+        },
+        # Mojolicious-style layout helper (auto-prepends 'layouts/')
+        layout => sub {
+            shift;  # Discard Template::EmbeddedPerl instance
+            my ($layout, %vars) = @_;
+            my $ctx = $_current_render_context or die "No render context set during rendering";
+            # Auto-prepend 'layouts/' if not already present
+            $layout = "layouts/$layout" unless $layout =~ m{^layouts/};
+            $ctx->set_layout($layout, %vars);
             return '';
         },
         # Retrieve content - main body or named block
         content => sub {
             my $ep = shift;  # Template::EmbeddedPerl instance (for raw())
             my ($name) = @_;
-            my $view = $_current_view or die "No current view set during rendering";
+            my $ctx = $_current_render_context or die "No render context set during rendering";
             # If no name given, return main content; otherwise return named block
             $name //= 'content';
-            return $ep->raw($view->{_blocks}{$name} // '');
+            return $ep->raw($ctx->blocks->{$name} // '');
         },
         # Set/append content to a named block
         content_for => sub {
             shift;  # Discard Template::EmbeddedPerl instance
             my ($name, $content) = @_;
-            my $view = $_current_view or die "No current view set during rendering";
-            # If content is a coderef, call it with $view and use the result
+            my $ctx = $_current_render_context or die "No render context set during rendering";
+            # If content is a coderef, call it and use the result
             if (ref($content) eq 'CODE') {
-                $content = $content->($view);
+                $content = $content->($ctx);
             }
-            $view->{_blocks}{$name} //= '';
-            $view->{_blocks}{$name} .= $content;
+            $ctx->blocks->{$name} //= '';
+            $ctx->blocks->{$name} .= $content;
             return '';
         },
         # Block helper (set named content block - replaces, doesn't append)
         block => sub {
             shift;  # Discard Template::EmbeddedPerl instance
             my ($name, $content) = @_;
-            my $view = $_current_view or die "No current view set during rendering";
-            # If content is a coderef, call it with $view and use the result
+            my $ctx = $_current_render_context or die "No render context set during rendering";
+            # If content is a coderef, call it and use the result
             if (ref($content) eq 'CODE') {
-                $content = $content->($view);
+                $content = $content->($ctx);
             }
-            $view->{_blocks}{$name} = $content;
+            $ctx->blocks->{$name} = $content;
             return '';
         },
         # Capture helper - capture template content into a variable
         capture => sub {
             shift;  # Discard Template::EmbeddedPerl instance
             my ($code) = @_;
-            my $view = $_current_view or die "No current view set during rendering";
-            return ref($code) eq 'CODE' ? $code->($view) : ($code // '');
+            my $ctx = $_current_render_context or die "No render context set during rendering";
+            return ref($code) eq 'CODE' ? $code->($ctx) : ($code // '');
         },
         # Route helper
         route => sub {
             shift;  # Discard Template::EmbeddedPerl instance
             my ($name, %params) = @_;
-            my $view = $_current_view or die "No current view set during rendering";
-            if ($view->{_app} && $view->{_app}->can('url_for')) {
-                return $view->{_app}->url_for($name, %params) // '';
+            my $ctx = $_current_render_context or die "No render context set during rendering";
+            if ($ctx->app && $ctx->app->can('url_for')) {
+                return $ctx->app->url_for($name, %params) // '';
             }
             return '';
         },
@@ -647,57 +634,16 @@ sub _find_template ($self, $name) {
     return wantarray ? (undef, \@searched) : undef;
 }
 
-# Internal: Render a layout with content
-sub _render_layout ($self, $content, %vars) {
-    my $layout_name = $self->{_layout};
-    my %layout_vars = %{$self->{_layout_vars}};
+=head2 current_render_context
 
-    # Store the content block
-    $self->{_blocks}{content} = $content;
+    my $ctx = $view->current_render_context;
 
-    # Reset layout tracking before rendering (layout may set its own extends)
-    $self->{_layout} = undef;
-    $self->{_layout_vars} = {};
-
-    # Get compiled layout template
-    my $template = $self->_get_template($layout_name);
-
-    # Merge variables (layout vars override page vars)
-    my %render_vars = (%vars, %layout_vars);
-
-    my $output = $template->render(\%render_vars);
-
-    # If the layout itself called extends(), recurse to render that layout
-    if ($self->{_layout}) {
-        $output = $self->_render_layout($output, %render_vars);
-    }
-
-    return $output;
-}
-
-=head2 context
-
-    my $c = $view->context;
-
-Returns the current request context (if rendering within a request).
+Returns the current RenderContext (if rendering). Useful for roles/helpers.
 
 =cut
 
-sub context ($self) {
-    return $self->{_context};
-}
-
-=head2 set_context
-
-    $view->set_context($c);
-
-Set the current request context.
-
-=cut
-
-sub set_context ($self, $c) {
-    $self->{_context} = $c;
-    return $self;
+sub current_render_context ($self) {
+    return $_current_render_context;
 }
 
 =head1 TEMPLATE SYNTAX
