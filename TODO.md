@@ -17,11 +17,10 @@
   - Valiant::HTML::Util::Form uses context to detect Catalyst CSRF plugin
   - PAGI::Simple needs its own CSRF token generation/validation mechanism
   - Consider: middleware that sets token in session, helper to embed in forms
-- Strong parameters (like Rails) for form param handling
-  - **In Progress**: See STRUCTUREDPLAN.md for implementation plan
-  - Whitelist allowed params per action
-  - Auto-filter nested params (e.g., `permit(:customer_name, :email, line_items: [:product, :quantity])`)
-  - Integrate with Valiant's namespaced form fields (`my_app_model_order.*`)
+- ~~Strong parameters (like Rails) for form param handling~~ **DONE**
+  - Implemented as `PAGI::Simple::StructuredParams`
+  - See `perldoc PAGI::Simple::StructuredParams` for full documentation
+  - Usage: `(await $c->structured_body)->namespace('x')->permitted(...)->to_hash`
 
 ## Mount Enhancements (Future)
 
