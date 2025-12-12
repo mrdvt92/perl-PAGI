@@ -17,8 +17,6 @@
 
 use strict;
 use warnings;
-use lib 'lib';
-use lib 'examples/simple-19-valiant-forms/lib';
 use experimental 'signatures';
 use Future::AsyncAwait;
 
