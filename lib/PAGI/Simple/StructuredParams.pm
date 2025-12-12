@@ -62,6 +62,11 @@ sub to_hash ($self) {
         $nested = $self->_apply_permitted($nested, $self->{_permitted_rules});
     }
 
+    # Step 4: Apply skip filtering if skip fields are defined
+    if (keys %{$self->{_skip_fields}}) {
+        $nested = $self->_apply_skip($nested);
+    }
+
     return $nested;
 }
 
@@ -283,6 +288,56 @@ sub _apply_permitted ($self, $data, $rules, $key_path = '') {
             }
         } else {
             $i++;
+        }
+    }
+
+    return \%result;
+}
+
+# Step 4: Skip filtering (e.g., _destroy pattern)
+
+# Remove array items where skip fields are truthy, and remove skip fields from surviving items
+sub _apply_skip ($self, $data) {
+    return $data unless keys %{$self->{_skip_fields}};
+    return $data unless ref($data) eq 'HASH';
+
+    my %result;
+    for my $key (keys %$data) {
+        my $value = $data->{$key};
+
+        if (ref($value) eq 'ARRAY') {
+            # Filter array items
+            my @filtered;
+            for my $item (@$value) {
+                if (ref($item) eq 'HASH') {
+                    # Check if any skip field is truthy
+                    my $should_skip = 0;
+                    for my $skip_field (keys %{$self->{_skip_fields}}) {
+                        if ($item->{$skip_field}) {
+                            $should_skip = 1;
+                            last;
+                        }
+                    }
+
+                    unless ($should_skip) {
+                        # Clone the item and remove skip fields from surviving items
+                        my %clean_item = %$item;
+                        delete $clean_item{$_} for keys %{$self->{_skip_fields}};
+                        # Recursively apply skip to nested structures
+                        push @filtered, $self->_apply_skip(\%clean_item);
+                    }
+                } else {
+                    # Non-hash items pass through (scalars, undef)
+                    push @filtered, $item;
+                }
+            }
+            $result{$key} = \@filtered;
+        } elsif (ref($value) eq 'HASH') {
+            # Recursively apply to nested hashes
+            $result{$key} = $self->_apply_skip($value);
+        } else {
+            # Scalar values pass through
+            $result{$key} = $value;
         }
     }
 
