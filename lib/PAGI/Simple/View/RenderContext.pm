@@ -159,6 +159,11 @@ sub render ($self, $template_name, %vars) {
     # Render layout if set
     if ($self->{_layout} && $use_layout) {
         $output = $self->_render_layout($output, %vars);
+    } else {
+        # Trim leading whitespace for htmx partial responses
+        # Template code blocks like <% my $x = 1; %>\n<div>... produce leading
+        # newlines that break htmx outerHTML swaps (htmx sees text node first)
+        $output =~ s/^\s+//;
     }
 
     return $output;
@@ -174,7 +179,10 @@ Render a template as a fragment (without layout).
 
 sub render_fragment ($self, $template_name, %vars) {
     my $template = $self->{view}->_get_template($template_name);
-    return $template->render(\%vars);
+    my $output = $template->render(\%vars);
+    # Trim leading whitespace - fragments are often used for htmx swaps
+    $output =~ s/^\s+//;
+    return $output;
 }
 
 =head2 include

@@ -493,6 +493,20 @@ sub _get_all_helpers ($self) {
         }
     };
 
+    # Add HTML attribute helpers (checked_if, class_if, etc.)
+    eval {
+        require PAGI::Simple::View::Helpers::Html;
+        my $html_helpers = PAGI::Simple::View::Helpers::Html::get_helpers($self);
+        # Wrap helpers to work with Template::EmbeddedPerl (receives $ep as first arg)
+        for my $name (keys %$html_helpers) {
+            my $original = $html_helpers->{$name};
+            $helpers{$name} = sub {
+                shift;  # Discard Template::EmbeddedPerl instance
+                return $original->(@_);
+            };
+        }
+    };
+
     # Add custom helpers from constructor
     for my $name (keys %{$self->{helpers}}) {
         my $original = $self->{helpers}{$name};

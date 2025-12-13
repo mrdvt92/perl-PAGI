@@ -5,6 +5,7 @@ use warnings;
 use experimental 'signatures';
 
 use Hash::MultiValue;
+use Module::Runtime 'use_module';
 use PAGI::Simple::Exception;
 
 =head1 NAME
@@ -105,7 +106,7 @@ Filters parameters to only those with the given prefix, then strips the prefix.
 For example, C<my_app_model_order.name> becomes C<name>.
 
 This is commonly used with Valiant forms which namespace all fields with the
-model class name.
+model class name (e.g., C<MyApp::Model::Order> becomes C<my_app_model_order>).
 
 Returns C<$self> for chaining.
 
@@ -117,6 +118,69 @@ sub namespace ($self, $ns = undef) {
         return $self;
     }
     return $self->{_namespace};
+}
+
+=head2 namespace_for
+
+    # With a class name (will be loaded if needed)
+    $sp->namespace_for('MyApp::Model::Order');
+
+    # With a model instance (class already loaded)
+    $sp->namespace_for($order);
+
+Like C<namespace()>, but accepts either a class name or an object instance
+that uses L<Valiant::Naming>. The C<< model_name->param_key >> from the class
+is used as the namespace.
+
+When given a class name (string), the class is loaded via L<Module::Runtime>
+if not already loaded. When given an object, the class is extracted via
+C<ref()> and loading is skipped since the class must already be loaded.
+
+This ensures the namespace matches exactly what C<form_for> generates,
+with the model class as the single source of truth.
+
+B<Examples:>
+
+    # UPDATE route - use the existing model instance
+    my $todo = $todos->find($id);
+    my $data = (await $c->structured_body)
+        ->namespace_for($todo)
+        ->permitted('title')
+        ->to_hash;
+
+    # CREATE route - use the class name
+    my $data = (await $c->structured_body)
+        ->namespace_for('TodoApp::Entity::Todo')
+        ->permitted('title')
+        ->to_hash;
+
+Dies if the class cannot be loaded or doesn't provide C<model_name>.
+
+Returns C<$self> for chaining.
+
+=cut
+
+sub namespace_for ($self, $class_or_object) {
+    my $class;
+
+    if (ref($class_or_object)) {
+        # It's an object - extract class name (already loaded)
+        $class = ref($class_or_object);
+    } else {
+        # It's a class name - load it if not already loaded
+        # Check if class already exists by seeing if it can respond to 'can'
+        $class = $class_or_object;
+        use_module($class) unless $class->can('can');
+    }
+
+    # Verify it has Valiant::Naming
+    die "$class does not provide model_name (missing Valiant::Naming?)"
+        unless $class->can('model_name');
+
+    # Delegate to the model for its canonical param_key
+    $self->{_namespace} = $class->model_name->param_key;
+
+    return $self;
 }
 
 =head2 permitted
@@ -609,6 +673,21 @@ When the same key appears multiple times:
         ->to_hash;
     # Items with _destroy=1 are removed
     # _destroy field removed from remaining items
+
+=head1 TODO
+
+Consider adding a C<build()> method that could instantiate an object directly
+from the filtered parameters. The namespace already encodes the class name
+(e.g., C<todo_app_entity_todo> implies C<TodoApp::Entity::Todo>), so this
+could potentially derive the class automatically:
+
+    my $todo = (await $c->structured_body)
+        ->namespace('todo_app_entity_todo')
+        ->permitted('title')
+        ->build;  # returns TodoApp::Entity::Todo->new(%$data)
+
+Trade-offs to consider: only helps CREATE (not UPDATE), couples StructuredParams
+to object instantiation, and the service factory pattern may be more flexible.
 
 =head1 SEE ALSO
 

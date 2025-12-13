@@ -66,6 +66,106 @@ subtest 'namespace() stores the value' => sub {
     is $sp->namespace(), 'my_app_model', 'namespace() getter returns stored value';
 };
 
+# ============================================================================
+# NAMESPACE_FOR TESTS
+# ============================================================================
+
+# Mock class that simulates Valiant::Naming behavior
+{
+    package MockValiant::Name;
+    sub new { my ($class, $key) = @_; bless { param_key => $key }, $class }
+    sub param_key { shift->{param_key} }
+
+    package TestApp::Model::Order;
+    sub model_name { MockValiant::Name->new('testapp_model_order') }
+
+    package TestApp::Entity::User;
+    sub model_name { MockValiant::Name->new('testapp_entity_user') }
+
+    package NoValiantClass;
+    # No model_name method - simulates class without Valiant::Naming
+}
+
+subtest 'namespace_for() with class name' => sub {
+    my $sp = PAGI::Simple::StructuredParams->new(params => {});
+    my $result = $sp->namespace_for('TestApp::Model::Order');
+
+    is $result, $sp, 'namespace_for() returns $self for chaining';
+    is $sp->namespace(), 'testapp_model_order', 'namespace set from class model_name->param_key';
+};
+
+subtest 'namespace_for() with object instance' => sub {
+    my $order = bless {}, 'TestApp::Model::Order';
+    my $sp = PAGI::Simple::StructuredParams->new(params => {});
+    my $result = $sp->namespace_for($order);
+
+    is $result, $sp, 'namespace_for() returns $self for chaining';
+    is $sp->namespace(), 'testapp_model_order', 'namespace set from object class';
+};
+
+subtest 'namespace_for() with different class' => sub {
+    my $sp = PAGI::Simple::StructuredParams->new(params => {});
+    $sp->namespace_for('TestApp::Entity::User');
+
+    is $sp->namespace(), 'testapp_entity_user', 'namespace set correctly for different class';
+};
+
+subtest 'namespace_for() with different object' => sub {
+    my $user = bless { name => 'John' }, 'TestApp::Entity::User';
+    my $sp = PAGI::Simple::StructuredParams->new(params => {});
+    $sp->namespace_for($user);
+
+    is $sp->namespace(), 'testapp_entity_user', 'namespace set correctly from different object';
+};
+
+subtest 'namespace_for() dies without model_name' => sub {
+    my $sp = PAGI::Simple::StructuredParams->new(params => {});
+
+    like(
+        dies { $sp->namespace_for('NoValiantClass') },
+        qr/NoValiantClass does not provide model_name/,
+        'dies with helpful message when class lacks model_name'
+    );
+};
+
+subtest 'namespace_for() dies for non-existent class' => sub {
+    my $sp = PAGI::Simple::StructuredParams->new(params => {});
+
+    # Non-existent classes don't have model_name, so we get the helpful Valiant error
+    like(
+        dies { $sp->namespace_for('NonExistent::Class::That::Does::Not::Exist') },
+        qr/does not provide model_name/,
+        'dies when class does not exist or lacks model_name'
+    );
+};
+
+subtest 'namespace_for() in full chain' => sub {
+    my $sp = PAGI::Simple::StructuredParams->new(
+        params => { 'testapp_model_order.customer' => 'John' }
+    );
+
+    my $result = $sp
+        ->namespace_for('TestApp::Model::Order')
+        ->permitted('customer')
+        ->to_hash;
+
+    is $result, { customer => 'John' }, 'namespace_for() works in full chain';
+};
+
+subtest 'namespace_for() with object in full chain' => sub {
+    my $order = bless {}, 'TestApp::Model::Order';
+    my $sp = PAGI::Simple::StructuredParams->new(
+        params => { 'testapp_model_order.total' => '99.99' }
+    );
+
+    my $result = $sp
+        ->namespace_for($order)
+        ->permitted('total')
+        ->to_hash;
+
+    is $result, { total => '99.99' }, 'namespace_for() with object works in full chain';
+};
+
 subtest 'permitted() returns self for chaining' => sub {
     my $sp = PAGI::Simple::StructuredParams->new(params => {});
     my $result = $sp->permitted('name', 'email');
