@@ -5,8 +5,8 @@ This document contains a comprehensive audit of PAGI::Server identifying issues 
 **Audit Date:** 2024-12-14
 **Files Audited:** `lib/PAGI/Server.pm`, `lib/PAGI/Server/*.pm`
 **Total Issues Found:** 29 (5 Critical, 3 High, 17 Medium, 4 Low)
-**Issues Fixed:** 14 (1.1-1.5, 2.1, 2.3, 2.4, 2.5, 3.3, 3.7, 3.8, 3.9, 3.10)
-**Issues Removed:** 2 (1.6, 2.2 - not real issues)
+**Issues Fixed:** 15 (1.1-1.5, 2.1, 2.3, 2.4, 2.5, 3.3, 3.5, 3.7, 3.8, 3.9, 3.10)
+**Issues Removed:** 3 (1.6, 2.2, 3.4 - not real issues)
 
 ---
 
@@ -485,64 +485,67 @@ push @{$self->{receive_queue}}, { type => 'websocket.receive', ... };
 
 ### 3.4 Negative Buffer Index in Chunked Parsing
 
-**Status:** NOT FIXED
+**Status:** NOT AN ISSUE (Verified 2024-12-14)
 **File:** `lib/PAGI/Server/Protocol/HTTP1.pm`
 **Line:** 316
 
 **Problem:**
 If `$crlf < $total_consumed`, substr gets negative length.
 
-**Current Code:**
-```perl
-# Protocol/HTTP1.pm line 316
-my $size_line = substr($buffer, $total_consumed, $crlf - $total_consumed);
-# If $crlf < $total_consumed, this is negative length - undefined behavior
-```
+**Verification:**
+The existing code already has `last if $crlf < 0;` on line 309 before accessing the buffer.
+This check handles all cases where `$crlf` would be negative or less than `$total_consumed`
+because `index()` returns -1 when the pattern is not found. When the CRLF is found,
+`$crlf` is always >= `$total_consumed` since we start searching from that position.
 
-**Recommended Fix:**
-```perl
-my $crlf = index($buffer, "\r\n", $total_consumed);
-last if $crlf < 0;
-last if $crlf < $total_consumed;  # Add this check
-my $size_line = substr($buffer, $total_consumed, $crlf - $total_consumed);
-```
+**Conclusion:** No fix required - already properly handled.
 
 ---
 
 ### 3.5 Uncaught Exception in Connection Callback
 
-**Status:** NOT FIXED
+**Status:** FIXED (2024-12-14)
 **File:** `lib/PAGI/Server/Connection.pm`
-**Lines:** 130-164
+**Lines:** 179-202
 
 **Problem:**
-on_read callback doesn't wrap `_try_handle_request()` in eval.
+on_read callback didn't wrap `_try_handle_request()` and `_process_websocket_frames()` in eval.
+Exceptions from Protocol::WebSocket::Frame (e.g., oversized payload) would propagate up through
+IO::Async's event loop, potentially crashing the server.
 
-**Current Code:**
-```perl
-# Connection.pm lines 130-164
-on_read => sub ($s, $buffref, $eof) {
-    # ...
-    $weak_self->_try_handle_request;  # No try/catch
-    return 0;
-},
-```
-
-**Recommended Fix:**
+**Fix Applied:**
 ```perl
 on_read => sub ($s, $buffref, $eof) {
     return 0 unless $weak_self;
+    # ... buffer handling ...
+
+    # Wrap processing in eval to prevent exceptions from crashing the event loop
     eval {
-        # ... existing code ...
+        if ($weak_self->{websocket_mode}) {
+            $weak_self->_process_websocket_frames;
+            return;
+        }
+        # ... other processing ...
         $weak_self->_try_handle_request;
     };
-    if ($@) {
-        warn "Connection callback error: $@\n";
-        $weak_self->_close() if $weak_self;
+    if (my $error = $@) {
+        warn "PAGI connection error: $error";
+        $weak_self->_close;
     }
     return 0;
 },
 ```
+
+**Additional Enhancement:**
+Added configurable `max_ws_frame_size` option (default 65536 bytes) which allows limiting
+WebSocket frame payload size. This works with Protocol::WebSocket::Frame's max_payload_size
+parameter to reject oversized frames before they can cause issues.
+
+**Configuration:**
+- `PAGI::Server->new(max_ws_frame_size => 1048576)` - 1MB limit
+- CLI: `pagi-server --max-ws-frame-size 1048576`
+
+**Test:** `t/20-callback-exception.t`
 
 ---
 
