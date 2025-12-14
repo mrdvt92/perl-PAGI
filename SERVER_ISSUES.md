@@ -4,8 +4,9 @@ This document contains a comprehensive audit of PAGI::Server identifying issues 
 
 **Audit Date:** 2024-12-14
 **Files Audited:** `lib/PAGI/Server.pm`, `lib/PAGI/Server/*.pm`
-**Total Issues Found:** 31 (6 Critical, 4 High, 17 Medium, 4 Low)
-**Issues Fixed:** 5 (1.1-1.5)
+**Total Issues Found:** 30 (5 Critical, 4 High, 17 Medium, 4 Low)
+**Issues Fixed:** 6 (1.1-1.5, 2.1)
+**Issues Removed:** 1 (1.6 - not a real issue)
 
 ---
 
@@ -188,56 +189,26 @@ Apply same header validation function.
 
 ---
 
-### 1.6 Infinite Loop on Malformed Chunked Request
+### 1.6 ~~Infinite Loop on Malformed Chunked Request~~
 
-**Status:** NOT FIXED
-**File:** `lib/PAGI/Server/Connection.pm`
-**Lines:** 500-540 (approximate)
+**Status:** NOT AN ISSUE (removed from audit 2024-12-14)
 
-**Problem:**
-If `parse_chunked_body()` repeatedly returns `(undef, 0, 0)` for malformed data, the receive handler loops forever waiting for more data that won't help.
+**Original Concern:**
+Claimed that malformed chunked data would cause infinite loop.
 
-**Current Code:**
-```perl
-# Simplified flow in Connection.pm chunked body handling
-while (1) {
-    my ($data, $consumed, $complete) = $protocol->parse_chunked_body($buffer);
+**Why It's Not An Issue:**
+Upon investigation, the server handles this correctly:
 
-    if ($consumed > 0) {
-        # Process data...
-    }
+1. **Client closes connection:** EOF is detected immediately (Connection.pm line 173-175),
+   triggering `_handle_disconnect` for immediate cleanup.
 
-    # Need more data - wait for it
-    await $receive_pending;  # LOOPS FOREVER if parse always fails
-}
-```
+2. **Client keeps connection open:** The 60-second idle timeout (Connection.pm line 97, 147-160)
+   ensures stale connections are eventually closed.
 
-**Impact:**
-- DoS: Send malformed chunked body, connection hangs forever
-- Resource exhaustion as connections accumulate
+3. **Async awaits:** The `await $receive_pending` resolves when either new data arrives
+   or the connection closes - it does not block indefinitely.
 
-**Recommended Fix:**
-```perl
-my $parse_attempts = 0;
-my $max_parse_attempts = 100;
-
-while (1) {
-    my ($data, $consumed, $complete) = $protocol->parse_chunked_body($buffer);
-
-    if ($consumed > 0) {
-        $parse_attempts = 0;  # Reset on progress
-        # Process data...
-    } else {
-        $parse_attempts++;
-        if ($parse_attempts > $max_parse_attempts) {
-            $self->_send_error_response(400, "Malformed chunked encoding");
-            $self->_close();
-            return;
-        }
-    }
-    # ...
-}
-```
+This is normal, correct server behavior for handling incomplete requests.
 
 ---
 
@@ -245,9 +216,9 @@ while (1) {
 
 ### 2.1 Chunk Size Parsing Not Validated
 
-**Status:** NOT FIXED
+**Status:** FIXED (2024-12-14)
 **File:** `lib/PAGI/Server/Protocol/HTTP1.pm`
-**Lines:** 316-318
+**Lines:** 344-354
 
 **Problem:**
 Chunk size is parsed with `hex()` which silently accepts invalid input.
