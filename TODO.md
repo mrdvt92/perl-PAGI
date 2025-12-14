@@ -10,6 +10,46 @@
 - middleware for handling Reverse proxy / reverse proxy path
 - Verify no memory leaks in PAGI::Server and PAGI::Simple
 
+### Performance: Buffered Access Logging
+
+Currently access logging does a synchronous write per request, which adds
+5-15% overhead. Options to improve:
+
+| Approach | Complexity | Benefit | Tradeoff |
+|----------|------------|---------|----------|
+| **Buffered + periodic flush** | Low | ~10-20% | Logs delayed by flush interval |
+| **Async write (IO::Async)** | Medium | ~15-25% | Still same process |
+| **Dedicated logger process** | High | ~30-40% | IPC complexity, extra process |
+
+**Recommended: Buffered logging with periodic flush**
+
+```perl
+# New options
+my $server = PAGI::Server->new(
+    access_log              => \*STDERR,
+    access_log_buffer_size  => 100,    # entries before flush
+    access_log_flush_interval => 1,    # seconds
+);
+```
+
+Implementation notes:
+- Accumulate entries in `@{$self->{_log_buffer}}`
+- Flush when buffer full OR timer fires
+- Must flush on shutdown to avoid losing entries
+- Acceptable to lose buffered entries on crash (access logs aren't critical)
+- Turns ~10,000 syscalls/second into ~100 syscalls/second
+
+**Bonus: Response buffering option**
+
+For small responses, buffer the entire response before writing to reduce
+syscall overhead:
+
+```perl
+my $server = PAGI::Server->new(
+    response_buffer_threshold => 8192,  # buffer responses under 8KB
+);
+```
+
 ## PAGI::Simple
 
 - Static file serving: pass-through trick for reverse proxy (like Plack)
@@ -166,6 +206,44 @@ Drawback: Probably too complex for a micro-framework. Document as pattern instea
 ## PubSub / Multi-Worker Considerations
 
 **Decision (2024-12):** PubSub remains single-process (in-memory) by design.
+
+### Research: MCE (Many-Core Engine) Integration
+
+MCE is a high-performance parallel processing framework that could solve
+cross-worker limitations in PAGI::Simple without requiring external Redis.
+
+**Potential uses:**
+
+| Feature | Current Limitation | MCE Solution |
+|---------|-------------------|--------------|
+| Cross-worker PubSub | In-memory only, single process | MCE::Shared hash for subscribers |
+| `run_blocking` | IO::Async::Function overhead | MCE workers (potentially faster) |
+| Shared state | Not possible across workers | MCE::Shared variables |
+| Work queues | N/A | MCE::Queue, MCE::Channel |
+
+**Example - Cross-worker PubSub:**
+
+```perl
+use MCE::Shared;
+my $subscribers = MCE::Shared->hash();  # Visible to all workers
+
+# In any worker:
+$pubsub->subscribe('chat', sub { ... });  # Would work across workers
+$pubsub->publish('chat', $message);       # All workers receive it
+```
+
+**Considerations:**
+
+- Mixing IO::Async and MCE needs care (both manage processes)
+- MCE adds a dependency but is well-maintained (Mario Roy)
+- Could be optional: use MCE if available, fall back to in-memory
+- More useful for PAGI::Simple than PAGI::Server (which is IO::Async-native)
+
+**Next steps:**
+
+1. Prototype MCE::Shared-backed PubSub
+2. Benchmark MCE vs IO::Async::Function for `run_blocking`
+3. Document integration patterns
 
 ### What We Learned
 
