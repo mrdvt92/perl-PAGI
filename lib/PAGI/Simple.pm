@@ -876,6 +876,15 @@ sub _get_worker_pool ($self) {
     my $pool = IO::Async::Function->new(
         code => sub {
             my ($code_string, $args) = @_;
+
+            # Ignore SIGINT/SIGTERM - workers are managed by the parent process.
+            # When Ctrl+C is pressed, the terminal sends SIGINT to the entire
+            # process group. Without this, workers die immediately (DEFAULT handler)
+            # before the parent can gracefully shut them down. With IGNORE, the
+            # parent's shutdown sequence can properly drain in-flight work.
+            $SIG{INT}  = 'IGNORE';
+            $SIG{TERM} = 'IGNORE';
+
             # Reconstruct the coderef from its deparsed string
             # We need to enable signatures since B::Deparse preserves them
             my $coderef = eval "use experimental 'signatures'; $code_string";
@@ -1435,6 +1444,39 @@ async sub _handle_lifespan ($self, $scope, $receive, $send) {
                     message => "Service initialization failed: $@",
                 });
                 return;
+            }
+
+            # Initialize worker pool if configured (eager initialization)
+            # This ensures all max_workers are spawned and ready before accepting requests
+            if ($self->{_worker_config}) {
+                eval {
+                    my $pool = $self->_get_worker_pool;
+                    my $config = $self->{_worker_config};
+                    $config = {} if !ref($config);
+                    my $max = $config->{max_workers} // 4;
+
+                    # Pre-warm workers by making dummy calls to force fork/init
+                    # IO::Async::Function only spawns workers on-demand, so we need
+                    # to make $max concurrent calls that block briefly to ensure
+                    # all workers are actually forked (instant calls may be processed
+                    # by fewer workers before new ones spawn)
+                    my @warmup_futures;
+                    for (1 .. $max) {
+                        push @warmup_futures, $pool->call(
+                            args => ['sub { select(undef,undef,undef,0.1); 1 }', []]
+                        );
+                    }
+                    Future->wait_all(@warmup_futures)->get;
+
+                    warn "[PAGI::Simple]   Workers:    $max (pool ready)\n";
+                };
+                if ($@) {
+                    await $send->({
+                        type    => 'lifespan.startup.failed',
+                        message => "Worker pool initialization failed: $@",
+                    });
+                    return;
+                }
             }
 
             eval {

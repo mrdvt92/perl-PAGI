@@ -26,7 +26,7 @@ my $app = PAGI::Simple->new(
 
     # Enable worker pool with 4 workers
     workers => {
-        max_workers  => 4,    # Maximum concurrent workers
+        max_workers  => 10,    # Maximum concurrent workers
         min_workers  => 1,    # Keep at least 1 worker alive
         idle_timeout => 60,   # Kill idle workers after 60s
     },
