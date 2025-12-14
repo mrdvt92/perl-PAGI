@@ -5,7 +5,7 @@ This document contains a comprehensive audit of PAGI::Server identifying issues 
 **Audit Date:** 2024-12-14
 **Files Audited:** `lib/PAGI/Server.pm`, `lib/PAGI/Server/*.pm`
 **Total Issues Found:** 29 (5 Critical, 3 High, 17 Medium, 4 Low)
-**Issues Fixed:** 7 (1.1-1.5, 2.1, 2.3)
+**Issues Fixed:** 8 (1.1-1.5, 2.1, 2.3, 2.4)
 **Issues Removed:** 2 (1.6, 2.2 - not real issues)
 
 ---
@@ -317,72 +317,42 @@ if ($exitcode == 2) {
 
 ### 2.4 No Graceful Shutdown for Active Requests
 
-**Status:** NOT FIXED
+**Status:** FIXED (2024-12-14)
 **File:** `lib/PAGI/Server.pm`
-**Lines:** 367-388
+**Lines:** 691-745
 
 **Problem:**
-During shutdown, workers are killed immediately with SIGTERM, aborting active requests.
+During shutdown, workers were killed immediately with SIGTERM, aborting active requests.
 
-**Current Code:**
+**Fix Applied:**
+1. Added `shutdown_timeout` configuration option (default 30 seconds)
+2. Modified `shutdown()` method to wait for active connections to drain
+3. Added `_drain_connections()` method that polls until connections array is empty
+4. After timeout, remaining connections are force-closed
+
+**Implementation:**
 ```perl
-# Server.pm lines 367-388 (_initiate_multiworker_shutdown)
-if ($self->{listen_socket}) {
-    close($self->{listen_socket});
-    delete $self->{listen_socket};
-}
+# New _drain_connections method waits for active requests
+async sub _drain_connections ($self) {
+    my $timeout = $self->{shutdown_timeout} // 30;
+    my $start = time();
+    my $loop = $self->loop;
 
-for my $pid (keys %{$self->{worker_pids}}) {
-    kill 'TERM', $pid;  # Immediate kill
+    while (@{$self->{connections}} > 0) {
+        my $elapsed = time() - $start;
+        if ($elapsed >= $timeout) {
+            # Force close remaining connections
+            for my $conn (@{$self->{connections}}) {
+                $conn->_close if $conn && $conn->can('_close');
+            }
+            last;
+        }
+        await $loop->delay_future(after => 0.1);
+    }
 }
 ```
 
-**Impact:**
-- Active HTTP requests get connection reset
-- WebSocket connections dropped mid-message
-- Clients see 500 errors during deployment
-
-**Recommended Fix:**
-```perl
-sub _initiate_multiworker_shutdown ($self) {
-    return if $self->{shutting_down};
-    $self->{shutting_down} = 1;
-
-    # 1. Stop accepting new connections
-    if ($self->{listen_socket}) {
-        close($self->{listen_socket});
-        delete $self->{listen_socket};
-    }
-
-    # 2. Send SIGTERM for graceful shutdown
-    for my $pid (keys %{$self->{worker_pids}}) {
-        kill 'TERM', $pid;
-    }
-
-    # 3. Wait up to 30 seconds for graceful exit
-    my $grace_period = 30;
-    my $waited = 0;
-
-    $self->loop->watch_time(
-        after => 1,
-        interval => 1,
-        code => sub {
-            $waited++;
-            if (!keys %{$self->{worker_pids}}) {
-                $self->loop->stop;
-                return;
-            }
-            if ($waited >= $grace_period) {
-                # Force kill remaining workers
-                for my $pid (keys %{$self->{worker_pids}}) {
-                    kill 'KILL', $pid;
-                }
-                $self->loop->stop;
-            }
-        },
-    );
-}
-```
+**Test:** `t/18-graceful-shutdown.t`
 
 ---
 
