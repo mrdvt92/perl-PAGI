@@ -5,8 +5,8 @@ This document contains a comprehensive audit of PAGI::Server identifying issues 
 **Audit Date:** 2024-12-14
 **Files Audited:** `lib/PAGI/Server.pm`, `lib/PAGI/Server/*.pm`
 **Total Issues Found:** 29 (5 Critical, 3 High, 17 Medium, 4 Low)
-**Issues Fixed:** 24 (1.1-1.5, 2.1, 2.3, 2.4, 2.5, 3.1, 3.2, 3.3, 3.5, 3.6, 3.7, 3.8, 3.9, 3.10, 3.12, 3.15, 3.16, 3.17, 4.2, 4.4)
-**Issues Removed:** 4 (1.6, 2.2, 3.4, 4.3 - not real issues)
+**Issues Fixed:** 25 (1.1-1.5, 2.1, 2.3, 2.4, 2.5, 3.1, 3.2, 3.3, 3.5, 3.6, 3.7, 3.8, 3.9, 3.10, 3.12, 3.13, 3.15, 3.16, 3.17, 4.2, 4.4)
+**Issues Removed:** 6 (1.6, 2.2, 3.4, 3.11, 3.14, 4.3 - not real issues or already fixed)
 
 ---
 
@@ -672,36 +672,32 @@ At 500 concurrent connections, this eliminates significant overhead on every req
 
 ---
 
-### 3.11 Large WebSocket Frames Not Streamed
+### 3.11 ~~Large WebSocket Frames Not Streamed~~
 
-**Status:** NOT FIXED
+**Status:** ALREADY FIXED (via 3.5)
 **File:** `lib/PAGI/Server/Connection.pm`
-**Lines:** 1464-1465
+**Line:** 1515
 
-**Problem:**
-Entire WebSocket message must fit in memory.
+**Original Concern:**
+Large WebSocket frames could cause memory spikes and DoS.
 
-**Current Code:**
+**Why It's Already Fixed:**
+The `max_ws_frame_size` configuration added in issue 3.5 is passed to
+Protocol::WebSocket::Frame as `max_payload_size`:
+
 ```perl
-# Connection.pm lines 1464-1465
-$frame->append($self->{buffer});
-$self->{buffer} = '';
+$weak_self->{websocket_frame} = Protocol::WebSocket::Frame->new(
+    max_payload_size => $weak_self->{max_ws_frame_size},  # Default 64KB
+);
 ```
 
-**Impact:**
-Large WebSocket frames cause memory spikes; potential DoS.
+Protocol::WebSocket::Frame throws an exception when payload exceeds this limit,
+which is caught by the eval wrapper (also added in 3.5), triggering connection close.
 
-**Recommended Fix:**
-Add configurable max frame size and reject oversized frames:
-```perl
-my $MAX_WEBSOCKET_FRAME = 1024 * 1024;  # 1MB
-
-if (length($self->{buffer}) > $MAX_WEBSOCKET_FRAME) {
-    $self->_send_close_frame(1009, 'Message too large');
-    $self->_close();
-    return;
-}
-```
+**Configuration:**
+- Default: 65536 bytes (64KB)
+- CLI: `pagi-server --max-ws-frame-size 1048576` (1MB)
+- Programmatic: `PAGI::Server->new(max_ws_frame_size => 1048576)`
 
 ---
 
@@ -741,43 +737,52 @@ if (defined $env{CONTENT_LENGTH}) {
 
 ### 3.13 Worker File Descriptor Leak
 
-**Status:** NOT FIXED
+**Status:** FIXED (2024-12-15)
 **File:** `lib/PAGI/Server.pm`
-**Lines:** 435-516
+**Lines:** 682, 705
 
 **Problem:**
-Listen socket not closed before worker exits.
+Listen socket not explicitly closed before worker exits.
 
-**Current Code:**
+**Fix Applied:**
 ```perl
-# Server.pm _run_as_worker
-sub _run_as_worker ($self, $listen_socket, $worker_num) {
-    # ...
-    $loop->run;
-    exit(0);  # Socket still open
-}
-```
+# Before startup failure exit (line 682)
+close($listen_socket) if $listen_socket;
+exit(2);
 
-**Recommended Fix:**
-```perl
-$loop->run;
-close($listen_socket);
+# Before normal exit (line 705)
+close($listen_socket) if $listen_socket;
 exit(0);
 ```
 
+Note: While the OS would close the socket anyway on process exit, explicitly
+closing it is good hygiene and ensures immediate FD release.
+
 ---
 
-### 3.14 Parent Doesn't Wait for Workers (Zombies)
+### 3.14 ~~Parent Doesn't Wait for Workers (Zombies)~~
 
-**Status:** NOT FIXED
+**Status:** NOT AN ISSUE (Verified 2024-12-15)
 **File:** `lib/PAGI/Server.pm`
-**Lines:** 379-381
+**Line:** 581
 
-**Problem:**
-Parent sends SIGTERM but doesn't wait, potentially leaving zombies.
+**Original Concern:**
+Parent sends SIGTERM but doesn't waitpid, potentially leaving zombie processes.
 
-**Recommended Fix:**
-See graceful shutdown fix in 2.4 - includes waiting for workers.
+**Why It's Not An Issue:**
+The server uses IO::Async's `$loop->watch_process()` (line 581) which automatically
+handles waitpid when child processes exit:
+
+```perl
+$loop->watch_process($pid => sub {
+    my ($exit_pid, $exitcode) = @_;
+    # ... handle worker exit ...
+});
+```
+
+IO::Async installs a SIGCHLD handler that calls waitpid() for watched processes,
+preventing zombie accumulation. This is the standard IO::Async pattern for
+child process management.
 
 ---
 
@@ -1044,10 +1049,10 @@ Validates cert_file, key_file, and ca_file existence and readability in construc
 | 3.8 | MEDIUM | Security | No cipher restrictions |
 | 3.9 | MEDIUM | Security | Client cert not enforced |
 | 3.10 | MEDIUM | Perf | O(N²) connection cleanup |
-| 3.11 | MEDIUM | DoS | Large WebSocket frames |
+| 3.11 | MEDIUM | DoS | ~~Large WebSocket frames~~ ALREADY FIXED (via 3.5) |
 | 3.12 | MEDIUM | Security | ~~Content-Length overflow~~ FIXED |
-| 3.13 | MEDIUM | Resource | Worker FD leak |
-| 3.14 | MEDIUM | Resource | Zombie workers |
+| 3.13 | MEDIUM | Resource | ~~Worker FD leak~~ FIXED |
+| 3.14 | MEDIUM | Resource | ~~Zombie workers~~ NOT AN ISSUE |
 | 3.15 | MEDIUM | Compat | ~~HTTP/1.0 keep-alive~~ FIXED |
 | 3.16 | MEDIUM | DoS | ~~No request line limit~~ FIXED |
 | 3.17 | MEDIUM | Stability | ~~Error after response start~~ FIXED |
