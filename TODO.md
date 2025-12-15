@@ -11,11 +11,10 @@
 - UTF-8 testing for text, HTML, JSON
 - middleware for handling Reverse proxy / reverse proxy path
 - ~~Verify no memory leaks in PAGI::Server and PAGI::Simple~~ **DONE** - See `perldoc PAGI::Server::Compliance`
-- Max requests per worker (--max-requests) for long-running deployments
-  - Common in Starman, Gunicorn, uWSGI
+- ~~Max requests per worker (--max-requests) for long-running deployments~~ **DONE**
+  - Workers restart after N requests via `max_requests` parameter
+  - CLI: `pagi-server --workers 4 --max-requests 10000 app.pl`
   - Defense against slow memory growth (~6.5 bytes/request observed)
-  - For multi-worker mode: restart individual workers after N requests
-  - Low priority - current growth is negligible (~6.5 MB per 1M requests)
 - Request/body timeouts (low priority)
   - Request timeout: max time to complete entire request (headers + body)
   - Body timeout: max time for body after headers received
