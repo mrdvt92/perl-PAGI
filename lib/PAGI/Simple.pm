@@ -1765,10 +1765,44 @@ async sub _handle_sse ($self, $scope, $receive, $send) {
 async sub _run_middleware_chain ($self, $c, $route) {
     my @middleware_names = @{$route->middleware};
     my $handler = $route->handler;
+    my $handler_methods = $route->handler_methods // [];
+    my $handler_instance = $route->handler_instance;
+
+    # Build the innermost handler
+    my $final_handler;
+
+    if (@$handler_methods && $handler_instance) {
+        # #method syntax - chain handler methods
+        $final_handler = async sub {
+            for my $method_name (@$handler_methods) {
+                my $method = $handler_instance->can($method_name);
+                unless ($method) {
+                    die "Handler " . ref($handler_instance) . " has no method '$method_name'";
+                }
+
+                my $result = $method->($handler_instance, $c);
+                if (blessed($result) && $result->can('get')) {
+                    await $result;
+                }
+
+                # Stop if response was sent
+                last if $c->response_started;
+            }
+        };
+    }
+    elsif ($handler) {
+        # Traditional coderef handler
+        $final_handler = sub {
+            return $handler->($c);
+        };
+    }
+    else {
+        die "Route has no handler or handler_methods";
+    }
 
     # If no middleware, just run the handler directly
     if (!@middleware_names) {
-        my $result = $handler->($c);
+        my $result = $final_handler->();
         if (blessed($result) && $result->can('get')) {
             await $result;
         }
@@ -1776,10 +1810,7 @@ async sub _run_middleware_chain ($self, $c, $route) {
     }
 
     # Build the chain from inside out (handler is innermost)
-    # Start with the handler as the final $next
-    my $chain = sub {
-        return $handler->($c);
-    };
+    my $chain = $final_handler;
 
     # Wrap each middleware around the chain, in reverse order
     for my $name (reverse @middleware_names) {
