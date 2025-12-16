@@ -522,6 +522,13 @@ Examples:
 # returning a coderef for dynamic config: sub { my ($caller_dir) = @_; ... }
 
 sub new ($class, %args) {
+    # If subclassed and has init(), call it for defaults
+    if ($class ne __PACKAGE__ && $class->can('init')) {
+        my %defaults = $class->init();
+        # Merge: defaults < constructor args
+        %args = (%defaults, %args);
+    }
+
     # Capture caller's file location for default template directory
     my ($caller_file) = (caller(0))[1];
     require File::Basename;
@@ -601,6 +608,18 @@ sub new ($class, %args) {
         # Accept string or arrayref
         my @assets = ref($share) eq 'ARRAY' ? @$share : ($share);
         $self->share(@assets);
+    }
+
+    # If subclassed and has routes(), call it
+    # Check that it's not inherited from base class
+    if ($class ne __PACKAGE__ && $class->can('routes')) {
+        my $class_routes = $class->can('routes');
+        my $base_routes = __PACKAGE__->can('routes');
+        if (!$base_routes || $class_routes ne $base_routes) {
+            # Call routes() with $self as both $app and $r
+            # since PAGI::Simple has routing methods
+            $class->routes($self, $self);
+        }
     }
 
     return $self;
