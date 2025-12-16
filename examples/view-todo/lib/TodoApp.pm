@@ -22,4 +22,6 @@ sub routes ($class, $app, $r) {
     $r->mount('/' => '::Todos');
 }
 
-1;
+# Modulino pattern: return coderef when do()'d, truthy when use/require'd
+# This allows: pagi-server ./lib/TodoApp.pm
+__PACKAGE__->to_app;

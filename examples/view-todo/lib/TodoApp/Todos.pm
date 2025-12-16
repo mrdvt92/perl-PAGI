@@ -19,9 +19,6 @@ sub routes ($class, $app, $r) {
     $r->patch('/todos/:id'         => '#load' => '#update')->name('todo_update');
     $r->delete('/todos/:id'        => '#load' => '#destroy')->name('todo_delete');
 
-    # Bulk operations (sub-handler)
-    $r->mount('/todos' => '::Todos::Bulk');
-
     # SSE for live updates
     $r->sse('/todos/live' => '#live')->name('todos_live');
 
