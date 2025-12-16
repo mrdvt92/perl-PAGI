@@ -312,4 +312,44 @@ PAGI Contributors
 
 =cut
 
+#---------------------------------------------------------------------------
+# PAGI::Simple::Router::Scoped - Prefixed router for handlers
+#---------------------------------------------------------------------------
+package PAGI::Simple::Router::Scoped;
+
+use strict;
+use warnings;
+use experimental 'signatures';
+
+sub new ($class, %args) {
+    return bless {
+        parent           => $args{parent},
+        prefix           => $args{prefix},
+        handler_instance => $args{handler_instance},
+        middleware       => $args{middleware} // [],
+    }, $class;
+}
+
+sub get ($self, $path, @args) { $self->_add_route('GET', $path, @args) }
+sub post ($self, $path, @args) { $self->_add_route('POST', $path, @args) }
+sub put ($self, $path, @args) { $self->_add_route('PUT', $path, @args) }
+sub patch ($self, $path, @args) { $self->_add_route('PATCH', $path, @args) }
+sub delete ($self, $path, @args) { $self->_add_route('DELETE', $path, @args) }
+sub del ($self, $path, @args) { $self->_add_route('DELETE', $path, @args) }
+sub any ($self, $path, @args) { $self->_add_route('*', $path, @args) }
+
+sub _add_route ($self, $method, $path, @args) {
+    my $full_path = $self->{prefix} . $path;
+
+    # Add handler_instance and middleware to args
+    push @args, (
+        handler_instance => $self->{handler_instance},
+        middleware => $self->{middleware},
+    );
+
+    return $self->{parent}->add($method, $full_path, @args);
+}
+
+package PAGI::Simple::Router;
+
 1;

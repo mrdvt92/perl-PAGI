@@ -2527,13 +2527,16 @@ Returns C<$app> for chaining.
 
 sub mount ($self, $prefix, $sub_app, @args) {
     my $middleware = [];
+    my $constructor_args = {};
 
-    # Check if middleware was passed
-    if (@args == 1 && ref($args[0]) eq 'ARRAY') {
-        $middleware = $args[0];
-    }
-    elsif (@args) {
-        die 'Invalid mount arguments: expected (prefix, app) or (prefix, app, \@middleware)';
+    # Parse args: can be \@middleware or \%constructor_args or both
+    for my $arg (@args) {
+        if (ref($arg) eq 'ARRAY') {
+            $middleware = $arg;
+        }
+        elsif (ref($arg) eq 'HASH') {
+            $constructor_args = $arg;
+        }
     }
 
     # Normalize prefix - ensure it starts with / and doesn't end with /
@@ -2561,7 +2564,18 @@ sub mount ($self, $prefix, $sub_app, @args) {
             die "mount(): $class has no new() method";
         }
 
-        $sub_app = $class->new;
+        # Check if this is a Handler
+        require PAGI::Simple::Handler;
+        if ($class->isa('PAGI::Simple::Handler')) {
+            return $self->_mount_handler($prefix, $class, $middleware, $constructor_args);
+        }
+
+        $sub_app = $class->new(%$constructor_args);
+    }
+
+    # Check if already-instantiated object is a Handler
+    if (blessed($sub_app) && $sub_app->isa('PAGI::Simple::Handler')) {
+        return $self->_mount_handler($prefix, ref($sub_app), $middleware, $constructor_args, $sub_app);
     }
 
     # Get the PAGI app from the sub-application
@@ -2575,7 +2589,7 @@ sub mount ($self, $prefix, $sub_app, @args) {
         $app = $sub_app;
     }
     else {
-        die 'mount() requires a PAGI::Simple app, class name, or PAGI app coderef';
+        die 'mount() requires a PAGI::Simple app, Handler, class name, or PAGI app coderef';
     }
 
     # Store the mounted app
@@ -2584,6 +2598,31 @@ sub mount ($self, $prefix, $sub_app, @args) {
         app        => $app,
         middleware => $middleware,
     };
+
+    return $self;
+}
+
+# Internal: Mount a Handler class
+sub _mount_handler ($self, $prefix, $class, $middleware, $constructor_args, $instance = undef) {
+    require PAGI::Simple::Handler;
+
+    # Instantiate handler with reference to root app
+    $instance //= $class->new(
+        %$constructor_args,
+        app => $self,
+    );
+
+    # Create a scoped router for this handler
+    # Routes added here will be prefixed and have handler_instance set
+    my $scoped_router = PAGI::Simple::Router::Scoped->new(
+        parent          => $self->{router},
+        prefix          => $prefix,
+        handler_instance => $instance,
+        middleware      => [@{$self->{_group_middleware}}, @$middleware],
+    );
+
+    # Call the handler's routes() class method
+    $class->routes($self, $scoped_router);
 
     return $self;
 }
