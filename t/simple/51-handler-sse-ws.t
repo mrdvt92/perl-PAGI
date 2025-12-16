@@ -162,4 +162,33 @@ subtest 'websocket routes can be named' => sub {
     is($url, '/chat', 'url_for resolves named WebSocket route');
 };
 
+# Handler that uses named SSE/WebSocket routes
+{
+    package TestApp::NamedRoutes;
+    use parent 'PAGI::Simple::Handler';
+    use experimental 'signatures';
+
+    sub routes ($class, $app, $r) {
+        $r->get('/' => '#index')->name('home');
+        $r->sse('/live' => '#live')->name('live_feed');
+        $r->websocket('/chat' => '#chat')->name('chat_room');
+    }
+
+    sub index ($self, $c) { $c->text('ok') }
+    sub live ($self, $sse) { }
+    sub chat ($self, $ws) { }
+
+    $INC{'TestApp/NamedRoutes.pm'} = 1;
+}
+
+# Test 5: Named routes work via Router::Scoped
+subtest 'named SSE/WebSocket routes via handler' => sub {
+    my $app = PAGI::Simple->new;
+    $app->mount('/api' => 'TestApp::NamedRoutes');
+
+    is($app->url_for('home'), '/api/', 'HTTP named route has prefix');
+    is($app->url_for('live_feed'), '/api/live', 'SSE named route has prefix');
+    is($app->url_for('chat_room'), '/api/chat', 'WebSocket named route has prefix');
+};
+
 done_testing;

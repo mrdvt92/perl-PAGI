@@ -403,7 +403,7 @@ sub sse ($self, $path, @args) {
         }
     }
 
-    $self->{app}->sse($full_path, @resolved_args);
+    return $self->{app}->sse($full_path, @resolved_args);
 }
 
 sub websocket ($self, $path, @args) {
@@ -424,7 +424,7 @@ sub websocket ($self, $path, @args) {
         }
     }
 
-    $self->{app}->websocket($full_path, @resolved_args);
+    return $self->{app}->websocket($full_path, @resolved_args);
 }
 
 sub _add_route ($self, $method, $path, @args) {
