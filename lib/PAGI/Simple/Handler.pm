@@ -144,6 +144,34 @@ The C<load> method runs first, then C<show>. If C<load> sends a response
         $c->json($c->stash->{todo});
     }
 
+=head1 SSE AND WEBSOCKET ROUTES
+
+Handlers can define SSE and WebSocket routes using the same C<#method>
+syntax as HTTP routes:
+
+    sub routes ($class, $app, $r) {
+        $r->get('/' => '#index');
+        $r->sse('/live' => '#live')->name('live_feed');
+        $r->websocket('/chat' => '#chat')->name('chat_room');
+    }
+
+    sub live ($self, $sse) {
+        $sse->send_event(data => 'connected');
+        $sse->subscribe('updates' => sub ($msg) {
+            $sse->send_event(data => $msg);
+        });
+    }
+
+    sub chat ($self, $ws) {
+        $ws->on(message => sub ($msg) {
+            $ws->send("Echo: $msg");
+        });
+    }
+
+Note that SSE handlers receive a L<PAGI::Simple::SSE> object and
+WebSocket handlers receive a L<PAGI::Simple::WebSocket> object,
+not a Context object.
+
 =head1 SEE ALSO
 
 L<PAGI::Simple>, L<PAGI::Simple::Context>

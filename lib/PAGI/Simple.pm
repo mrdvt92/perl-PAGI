@@ -2393,6 +2393,7 @@ sub route ($self, $method, $path, @args) {
 
 =head2 websocket
 
+    # Basic usage
     $app->websocket('/ws' => sub ($ws) {
         $ws->send("Welcome!");
 
@@ -2405,6 +2406,12 @@ sub route ($self, $method, $path, @args) {
         });
     });
 
+    # Named route
+    $app->websocket('/chat' => sub ($ws) { ... })->name('chat');
+
+    # In handlers with #method syntax
+    $r->websocket('/room' => '#room')->name('chat_room');
+
     $app->websocket('/chat/:room' => sub ($ws) {
         my $room = $ws->param('room');
         # ...
@@ -2413,7 +2420,7 @@ sub route ($self, $method, $path, @args) {
 Register a WebSocket route. The callback receives a PAGI::Simple::WebSocket
 context object instead of the regular HTTP context.
 
-Returns $app for chaining.
+Returns a route object that can be named with C<< ->name() >> for URL generation.
 
 =cut
 
@@ -2427,6 +2434,7 @@ sub websocket ($self, $path, $handler) {
 
 =head2 sse
 
+    # Basic usage
     $app->sse('/events' => sub ($sse) {
         $sse->send_event(
             data  => { message => "Hello" },
@@ -2439,6 +2447,12 @@ sub websocket ($self, $path, $handler) {
         });
     });
 
+    # Named route
+    $app->sse('/events' => sub ($sse) { ... })->name('live_events');
+
+    # In handlers with #method syntax
+    $r->sse('/live' => '#live')->name('live_feed');
+
     $app->sse('/notifications/:user' => sub ($sse) {
         my $user = $sse->param('user');
         # ...
@@ -2447,7 +2461,7 @@ sub websocket ($self, $path, $handler) {
 Register a Server-Sent Events route. The callback receives a PAGI::Simple::SSE
 context object instead of the regular HTTP context.
 
-Returns $app for chaining.
+Returns a route object that can be named with C<< ->name() >> for URL generation.
 
 =cut
 
