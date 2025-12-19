@@ -1,256 +1,76 @@
 # TODO
 
-## PAGI::Server
+## PAGI::Server - Ready for Release
 
-- When in multi-worker mode, add timeout to allow reaping children
-- Review common server configuration options (from Uvicorn, Hypercorn, Starman)
+### Completed
+
 - ~~More logging levels and control (like Apache)~~ **DONE** - See `log_level` option (debug, info, warn, error)
 - ~~Run compliance tests: HTTP/1.1, WebSocket, TLS, SSE~~ **DONE** - See `perldoc PAGI::Server::Compliance`
   - HTTP/1.1: Full compliance (10/10 tests)
   - WebSocket (Autobahn): 215/301 non-compression tests pass (71%); validation added for RSV bits, reserved opcodes, close codes, control frame sizes
-- UTF-8 testing for text, HTML, JSON
-- middleware for handling Reverse proxy / reverse proxy path
 - ~~Verify no memory leaks in PAGI::Server and PAGI::Simple~~ **DONE** - See `perldoc PAGI::Server::Compliance`
 - ~~Max requests per worker (--max-requests) for long-running deployments~~ **DONE**
   - Workers restart after N requests via `max_requests` parameter
   - CLI: `pagi-server --workers 4 --max-requests 10000 app.pl`
   - Defense against slow memory growth (~6.5 bytes/request observed)
-- Request/body timeouts (low priority)
-  - Request timeout: max time to complete entire request (headers + body)
-  - Body timeout: max time for body after headers received
-  - Current idle timeout (60s) handles most cases
-  - Async model means slow clients don't block others
-  - Typically handled by nginx/HAProxy in production
-  - Only needed if running without reverse proxy and facing abuse
-  - need to review all ways we make paths to make sure we use filesystem agnostic tools and not assume everyone uses / for path delims *"$root/$path" to File::Spec->catfile($root, $path)
+- ~~Worker reaping in multi-worker mode~~ **DONE** - Uses `$loop->watch_process()` for automatic respawn
+- ~~Filesystem-agnostic path handling~~ **DONE** - Uses `File::Spec->catfile()` throughout
+- ~~File response streaming~~ **DONE** - Supports `file` and `fh` in response body
+  - Small files (≤64KB): direct in-process read
+  - Large files: sendfile() when available, worker pool fallback
+  - Range requests with offset/length
 
-## PAGI::Simple
+### Future Enhancements (Not Blockers)
 
-- Static file serving: pass-through trick for reverse proxy (like Plack)
-- CSRF protection middleware/helper for Valiant form integration
-  - Valiant::HTML::Util::Form uses context to detect Catalyst CSRF plugin
-  - PAGI::Simple needs its own CSRF token generation/validation mechanism
-  - Consider: middleware that sets token in session, helper to embed in forms
+- Review common server configuration options (from Uvicorn, Hypercorn, Starman)
+- UTF-8 testing for text, HTML, JSON
+- Middleware for handling reverse proxy / X-Forwarded-* headers
+- Request/body timeouts (low priority - idle timeout handles most cases, typically nginx/HAProxy handles this in production)
+
+## PAGI::Simple - Ready for Release
+
+### Completed
+
 - ~~Strong parameters (like Rails) for form param handling~~ **DONE**
   - Implemented as `PAGI::Simple::StructuredParams`
   - See `perldoc PAGI::Simple::StructuredParams` for full documentation
   - Usage: `(await $c->structured_body)->namespace('x')->permitted(...)->to_hash`
-- Controller pattern (`$c->controller` or similar)
-  - Group related routes into controller classes
-  - Consider: `$app->controller('/orders' => 'MyApp::Controller::Orders')`
-  - Or: `$c->controller->action_name` for current controller context
-  - Look at: Mojolicious controllers, Catalyst controllers, Rails controllers
-  - Benefits: better organization for larger apps, reusable action logic, before/after filters per controller
+- ~~Worker pool for blocking operations~~ **DONE**
+  - `$c->run_blocking(sub { ... })` runs code in worker processes
+  - Opt-in via `workers => { max_workers => 4 }` config
 
-- Path param injection into handler signatures (future - nice to have)
-  - Dream: `$app->get('/todos/:id' => async sub ($c, $id) { ... })` with `$id` auto-populated
-  - Challenge: Native Perl signatures don't expose param names at runtime
-  - Options explored:
-    - Positional matching (simple, pass params in URL order) - recommended approach
-    - Name matching via Function::Parameters (preserves metadata, adds dependency)
-    - Custom keyword via XS::Parse::Sublike (significant work)
-    - B::Deparse hack (fragile)
-  - Benefit: ~1 line saved per path param, cleaner signatures, more "modern" feel
-  - Priority: Low - polish, not substance. Form objects would reduce more friction.
+### Future Enhancements (Not Blockers)
 
-- Form Objects (future - Django/Reform inspired)
-  - Problem: `form_for` and `structured_body` are two halves that should be connected
-  - Currently: view renders fields, controller separately declares `permitted()` - easy to get out of sync
-  - Solution: explicit Form classes that handle BOTH rendering AND parsing
-  - Example vision:
-    ```perl
-    package TodoApp::Form::CreateTodo;
-    use Moo;
-    with 'PAGI::Simple::Form';
+- Static file serving: pass-through trick for reverse proxy (like Plack)
+- CSRF protection middleware/helper for Valiant form integration
+- Controller pattern for larger apps
+- Path param injection into handler signatures
+- Form Objects (Django/Reform inspired)
 
-    sub model_class { 'TodoApp::Entity::Todo' }
-    sub fields { [qw(title)] }
+## Future Ideas
 
-    # Controller usage:
-    my $form = TodoApp::Form::CreateTodo->new(params => await $c->body_params);
-    if ($form->valid) {
-        my $todo = $todos->build($form->data);
-    }
+### Worker Pool Enhancements
 
-    # View usage - same form object:
-    <%= form_for($form, sub { ... }) %>
-    ```
-  - Benefits: single source of truth, testable, explicit, common pattern
-  - Look at: Django ModelForm, Reform/Trailblazer, Phoenix.HTML.Form
-  - Consider: how to integrate with existing Valiant forms without duplication
-  - Note: This would reduce current boilerplate where you need namespace_for + permitted
+Level 2 (Worker Service Scope) and Level 3 (Named Worker Pools) are documented
+in the codebase history but deemed overkill for a micro-framework. The current
+`$c->run_blocking()` covers the common use case.
 
-## Worker Pool / Blocking Operations
+### Mount Enhancements
 
-### Level 1: `$c->run_blocking()` - IMPLEMENTED
+- **404 pass-through**: `$app->mount('/api' => $sub_app, { pass_through => 1 })`
+- **Shared state via $scope**: `$scope->{'pagi.services'}` for composition
 
-Simple context method to run blocking code in worker processes. Opt-in via config.
+### PubSub / Multi-Worker
 
-```perl
-my $app = PAGI::Simple->new(
-    workers => { max_workers => 4 },
-);
+**Decision:** PubSub remains single-process (in-memory) by design.
 
-$app->get('/search' => async sub ($c) {
-    my $results = await $c->run_blocking(sub {
-        # Blocking DBI query runs in worker process
-        my $dbh = DBI->connect(...);
-        return $dbh->selectall_arrayref(...);
-    });
-    $c->json($results);
-});
-```
-
-See `PLAN_WORKER_LEVEL1.md` for implementation plan.
-
-### Level 2: Worker Service Scope (Future)
-
-A new service scope `Worker` that automatically runs service methods in workers:
-
-```perl
-package MyApp::Service::DB;
-use parent 'PAGI::Simple::Service::Worker';
-
-# Methods automatically return Futures, run in worker processes
-sub find_all ($self, $table) {
-    $self->{dbh}->selectall_arrayref("SELECT * FROM $table");
-}
-```
-
-Registration:
-```perl
-$app->service('DB', 'MyApp::Service::DB', 'Worker', { dsn => '...' });
-```
-
-Usage (methods return Futures):
-```perl
-my $todos = await $c->service('DB')->find_all('todos');
-```
-
-Benefits:
-- Reusable across routes
-- Per-worker state (DB connections created once per worker)
-- Clean separation of concerns
-
-Challenges:
-- More complex implementation (method call serialization)
-- Worker initialization lifecycle
-- Proxy object to intercept method calls
-
-### Level 3: Named Worker Pools (Future - Probably Overkill)
-
-Multiple worker pools with different configurations:
-
-```perl
-$app->worker_pool('db', {
-    max_workers => 4,
-    init => sub ($worker) {
-        $worker->{dbh} = DBI->connect(...);
-    },
-});
-
-$app->worker_pool('compute', {
-    max_workers => 2,  # CPU-bound, fewer workers
-});
-
-$app->worker_operation('db.find_all', sub ($worker, $table) {
-    $worker->{dbh}->selectall_arrayref("SELECT * FROM $table");
-});
-```
-
-Usage:
-```perl
-my $todos = await $c->worker('db.find_all', 'todos');
-```
-
-Benefits: Separate pools for different workloads, worker-local state.
-Drawback: Probably too complex for a micro-framework. Document as pattern instead.
-
-## Mount Enhancements (Future)
-
-- **404 pass-through**: Option to try parent routes if mounted app returns 404
-  - `$app->mount('/api' => $sub_app, { pass_through => 1 })`
-  - Use case: fallback routes in parent app
-
-- **Shared state via $scope**: Allow mounted apps to access parent services/stash
-  - Add `$scope->{'pagi.services'}` and `$scope->{'pagi.stash'}`
-  - Follows PSGI convention for framework-specific data
-  - Enables composition without tight coupling
-
-## PubSub / Multi-Worker Considerations
-
-**Decision (2024-12):** PubSub remains single-process (in-memory) by design.
-
-### Research: MCE (Many-Core Engine) Integration
-
-MCE is a high-performance parallel processing framework that could solve
-cross-worker limitations in PAGI::Simple without requiring external Redis.
-
-**Potential uses:**
-
-| Feature | Current Limitation | MCE Solution |
-|---------|-------------------|--------------|
-| Cross-worker PubSub | In-memory only, single process | MCE::Shared hash for subscribers |
-| `run_blocking` | IO::Async::Function overhead | MCE workers (potentially faster) |
-| Shared state | Not possible across workers | MCE::Shared variables |
-| Work queues | N/A | MCE::Queue, MCE::Channel |
-
-**Example - Cross-worker PubSub:**
-
-```perl
-use MCE::Shared;
-my $subscribers = MCE::Shared->hash();  # Visible to all workers
-
-# In any worker:
-$pubsub->subscribe('chat', sub { ... });  # Would work across workers
-$pubsub->publish('chat', $message);       # All workers receive it
-```
-
-**Considerations:**
-
-- Mixing IO::Async and MCE needs care (both manage processes)
-- MCE adds a dependency but is well-maintained (Mario Roy)
-- Could be optional: use MCE if available, fall back to in-memory
-- More useful for PAGI::Simple than PAGI::Server (which is IO::Async-native)
-
-**Next steps:**
-
-1. Prototype MCE::Shared-backed PubSub
-2. Benchmark MCE vs IO::Async::Function for `run_blocking`
-3. Document integration patterns
-
-### What We Learned
-
-We explored adding IPC between parent and workers at the PAGI::Server level
-to enable cross-worker PubSub. After research, we decided against it:
-
-1. **Industry standard**: All major frameworks (Django Channels, Socket.io,
-   Starlette) use in-memory for dev and Redis for production. Nobody does IPC.
-
-2. **Why no IPC?**
-   - IPC only works on one machine; Redis works across machines
-   - If you need multi-worker, you'll soon need multi-server
-   - External brokers provide: persistence, monitoring, pub/sub patterns
-   - IPC adds complexity for a transitional use case
-
-3. **PAGI philosophy**: PAGI::Server is a reference implementation, not the
-   only option. Building IPC into it would couple PAGI::Simple to PAGI::Server.
-
-### Current Design
-
-- `PAGI::Simple::PubSub` uses in-memory backend (single-process)
+- Industry standard: in-memory for dev, Redis for production
 - For multi-worker/multi-server: use Redis or similar external broker
-- Document this limitation clearly in PubSub docs
+- MCE integration explored but adds complexity
 
-### Future Options (if needed)
-
-- Add pluggable backend API to PubSub (easy to add later)
-- Provide Redis backend example in documentation
-- Users can implement their own backends
-
-## Documentation
+## Documentation (Post-Release)
 
 - Scaling guide: single-worker vs multi-worker vs multi-server
 - PubSub limitations and Redis migration path
 - Performance tuning guide
-- Streaming request body support shipped (opt-in, backpressure, limits, decoding) - see PLAN.md and the simple-14-streaming example
+- Deployment guide (systemd, Docker, nginx)
