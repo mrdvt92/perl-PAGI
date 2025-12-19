@@ -577,3 +577,79 @@ The `$scope->{state}` hashref is:
 - Created during lifespan scope
 - Shallow-copied to each request scope
 - Use for sharing database pools, config, caches
+
+## Multi-Protocol Applications
+
+Real applications often handle multiple protocols in one app.
+
+### Dispatcher Pattern
+
+```perl
+use strict;
+use warnings;
+use Future::AsyncAwait;
+use experimental 'signatures';
+
+async sub app ($scope, $receive, $send) {
+    my $type = $scope->{type};
+
+    if ($type eq 'lifespan') {
+        await handle_lifespan($scope, $receive, $send);
+    }
+    elsif ($type eq 'http') {
+        await handle_http($scope, $receive, $send);
+    }
+    elsif ($type eq 'websocket') {
+        await handle_websocket($scope, $receive, $send);
+    }
+    elsif ($type eq 'sse') {
+        await handle_sse($scope, $receive, $send);
+    }
+    else {
+        die "Unsupported scope type: $type";
+    }
+}
+
+# Implement each handler...
+
+$app;
+```
+
+### Routing by Path
+
+```perl
+async sub handle_http ($scope, $receive, $send) {
+    my $method = $scope->{method};
+    my $path   = $scope->{path};
+
+    if ($path eq '/' && $method eq 'GET') {
+        await send_home($scope, $receive, $send);
+    }
+    elsif ($path =~ m{^/api/} && $method eq 'POST') {
+        await handle_api($scope, $receive, $send);
+    }
+    else {
+        await send_404($send);
+    }
+}
+
+async sub handle_websocket ($scope, $receive, $send) {
+    my $path = $scope->{path};
+
+    if ($path eq '/ws/chat') {
+        await chat_handler($scope, $receive, $send);
+    }
+    elsif ($path eq '/ws/notifications') {
+        await notification_handler($scope, $receive, $send);
+    }
+    else {
+        # Reject unknown WebSocket paths
+        my $event = await $receive->();  # websocket.connect
+        await $send->({
+            type   => 'websocket.close',
+            code   => 4004,
+            reason => 'Not Found',
+        });
+    }
+}
+```
