@@ -653,3 +653,61 @@ async sub handle_websocket ($scope, $receive, $send) {
     }
 }
 ```
+
+## Running PAGI Applications
+
+### pagi-server CLI
+
+```bash
+# Basic usage
+pagi-server ./app.pl --port 5000
+
+# With options
+pagi-server ./app.pl \
+    --host 0.0.0.0 \
+    --port 8080 \
+    --workers 4 \
+    --access-log /var/log/access.log
+
+# TLS
+pagi-server ./app.pl \
+    --port 443 \
+    --ssl-cert /path/to/cert.pem \
+    --ssl-key /path/to/key.pem
+
+# Production (daemonize)
+pagi-server ./app.pl \
+    --port 8080 \
+    --workers 8 \
+    --daemonize \
+    --pid /var/run/myapp.pid \
+    --user www-data \
+    --group www-data
+```
+
+### Common Options
+
+| Option | Description |
+|--------|-------------|
+| `-p, --port` | Port to listen on (default: 5000) |
+| `-h, --host` | Host to bind (default: 127.0.0.1) |
+| `-w, --workers` | Number of worker processes |
+| `-a, --app` | Path to app file |
+| `-I, --lib` | Add to @INC |
+| `-q, --quiet` | Suppress startup messages |
+| `--access-log` | Access log file path |
+| `--log-level` | debug, info, warn, error |
+| `--timeout` | Request timeout in seconds |
+| `--max-requests` | Restart worker after N requests |
+| `-D, --daemonize` | Run in background |
+| `--pid` | PID file path |
+| `--user` | Drop privileges to user |
+| `--group` | Drop privileges to group |
+| `-v, --version` | Show version |
+
+### Signal Handling
+
+- `SIGTERM` / `SIGINT` - Graceful shutdown
+- `SIGHUP` - Graceful restart (reload app)
+- `SIGTTIN` - Increase workers by 1
+- `SIGTTOU` - Decrease workers by 1
