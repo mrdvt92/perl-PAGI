@@ -806,6 +806,168 @@ pagi-server ./app.pl \
 - `SIGTTIN` - Increase workers by 1
 - `SIGTTOU` - Decrease workers by 1
 
+## UTF-8 and Encoding
+
+PAGI follows Perl's bytes-vs-characters distinction strictly. Getting this wrong causes mojibake (garbled text) or "Wide character" warnings.
+
+### The Golden Rule
+
+**All data crossing the wire MUST be bytes, not Unicode characters.**
+
+- Response bodies → encode to bytes before sending
+- Request bodies → decode from bytes if you want characters
+- Headers → always bytes (ASCII)
+
+### Response Bodies
+
+**Wrong** - sending Unicode characters:
+```perl
+await $send->({
+    type => 'http.response.body',
+    body => "Привет мир",  # Raw Unicode - WILL CORRUPT
+});
+```
+
+**Right** - encode to bytes:
+```perl
+use Encode qw(encode_utf8);
+
+await $send->({
+    type => 'http.response.body',
+    body => encode_utf8("Привет мир"),  # Bytes - correct
+});
+```
+
+### Request Bodies
+
+Request bodies arrive as bytes. Decode if you need Unicode characters:
+
+```perl
+use Encode qw(decode_utf8);
+
+my $body_bytes = await read_body($receive);
+my $body_text = decode_utf8($body_bytes);  # Now safe for Unicode operations
+```
+
+### The `use utf8;` Pragma
+
+If your source code contains non-ASCII characters (like `"Привет"`), you MUST use the `utf8` pragma:
+
+```perl
+use 5.36;
+use utf8;  # Source code contains UTF-8 literals
+use Future::AsyncAwait;
+use Encode qw(encode_utf8);
+
+my $app = async sub ($scope, $receive, $send) {
+    my $greeting = "Привет мир! 🎉";  # Unicode in source
+
+    await $send->({
+        type    => 'http.response.start',
+        status  => 200,
+        headers => [
+            ['content-type', 'text/plain; charset=utf-8'],
+        ],
+    });
+    await $send->({
+        type => 'http.response.body',
+        body => encode_utf8($greeting),  # Encode before sending
+    });
+};
+
+$app;
+```
+
+**Without `use utf8;`**, Perl treats your source as Latin-1 bytes and the string will be wrong.
+
+### Path Decoding
+
+PAGI servers decode the request path for convenience:
+
+| Field | Encoding |
+|-------|----------|
+| `$scope->{path}` | Decoded UTF-8 characters (use for routing) |
+| `$scope->{raw_path}` | Original bytes (use if you need exact bytes) |
+| `$scope->{query_string}` | Raw bytes (decode yourself) |
+
+```perl
+# /users/José arrives as:
+$scope->{path}      # "José" (characters, ready to use)
+$scope->{raw_path}  # "Jos%C3%A9" (URL-encoded bytes)
+```
+
+### WebSocket: text vs bytes
+
+WebSocket messages have two distinct fields:
+
+| Field | Type | When to Use |
+|-------|------|-------------|
+| `text` | Unicode characters | Text messages (chat, JSON). Server handles UTF-8 encoding. |
+| `bytes` | Raw bytes | Binary data (images, files). No encoding. |
+
+**Receiving messages:**
+```perl
+my $msg = await $receive->();
+if ($msg->{type} eq 'websocket.receive') {
+    if (defined $msg->{text}) {
+        # $msg->{text} is decoded Unicode characters
+        my $chat_message = $msg->{text};  # Ready to use
+    }
+    elsif (defined $msg->{bytes}) {
+        # $msg->{bytes} is raw binary data
+        my $file_chunk = $msg->{bytes};
+    }
+}
+```
+
+**Sending messages:**
+```perl
+use utf8;  # If using Unicode literals in source
+
+# Text message - use 'text' field (server encodes to UTF-8)
+await $send->({
+    type => 'websocket.send',
+    text => "Привет! 🎉",  # Unicode OK here - server handles encoding
+});
+
+# Binary message - use 'bytes' field
+await $send->({
+    type  => 'websocket.send',
+    bytes => $binary_data,  # Raw bytes
+});
+```
+
+**Important:** For WebSocket `text`, the server handles UTF-8 encoding. You pass Unicode characters, not bytes. This is different from HTTP response bodies.
+
+### JSON Responses
+
+`JSON::PP::encode_json()` returns bytes (UTF-8 encoded), so no additional encoding needed:
+
+```perl
+use JSON::PP;
+
+my $data = { message => "Привет", emoji => "🎉" };
+my $json = encode_json($data);  # Already bytes
+
+await $send->({
+    type => 'http.response.body',
+    body => $json,  # Safe - already encoded
+});
+```
+
+### Quick Reference
+
+| Context | Input/Output | Encoding |
+|---------|--------------|----------|
+| HTTP response body | Bytes | `encode_utf8($text)` before sending |
+| HTTP request body | Bytes | `decode_utf8($bytes)` to get characters |
+| `$scope->{path}` | Characters | Already decoded |
+| `$scope->{query_string}` | Bytes | Decode yourself |
+| WebSocket `text` | Characters | Server handles encoding |
+| WebSocket `bytes` | Bytes | No encoding |
+| JSON (`encode_json`) | Bytes | Already UTF-8 encoded |
+| Source code literals | N/A | Add `use utf8;` if non-ASCII |
+
 ## Common Patterns
 
 ### Helper: Get Header Value
