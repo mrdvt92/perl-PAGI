@@ -5,8 +5,8 @@ PAGI is a specification for asynchronous Perl web applications, designed as a sp
 ## Repository Contents
 
 - **docs/** - PAGI specification documents
-- **examples/** - Reference PAGI applications (raw PAGI and PAGI::Simple)
-- **lib/** - Reference server implementation (PAGI::Server) and micro-framework (PAGI::Simple)
+- **examples/** - Reference PAGI applications demonstrating the raw protocol
+- **lib/** - Reference server implementation (PAGI::Server) and middleware
 - **bin/** - CLI launcher (pagi-server)
 - **t/** - Test suite
 
@@ -24,11 +24,8 @@ cpanm --installdeps .
 # Run tests
 prove -l t/
 
-# Start the server with a raw PAGI app
+# Start the server with a PAGI app
 pagi-server --app examples/01-hello-http/app.pl --port 5000
-
-# Or with a PAGI::Simple app
-pagi-server --app examples/simple-01-hello/app.pl --port 5000
 
 # Test it
 curl http://localhost:5000/
@@ -72,40 +69,13 @@ async sub app ($scope, $receive, $send) {
 - `sse` - Server-Sent Events stream
 - `lifespan` - Process startup/shutdown lifecycle
 
-## PAGI::Simple Micro-Framework
-
-For simpler applications, use the PAGI::Simple micro-framework:
-
-```perl
-use PAGI::Simple;
-
-my $app = PAGI::Simple->new(name => 'My App');
-
-$app->get('/' => sub ($c) {
-    $c->text("Hello, World!");
-});
-
-$app->get('/greet/:name' => sub ($c) {
-    my $name = $c->path_params->{name};
-    $c->json({ greeting => "Hello, $name!" });
-});
-
-$app->websocket('/ws' => sub ($ws) {
-    $ws->on(message => sub ($data) {
-        $ws->send("Echo: $data");
-    });
-});
-
-$app->to_app;
-```
-
-## UTF-8 Handling (Raw PAGI)
+## UTF-8 Handling
 
 - `scope->{path}` is UTF-8 decoded from the percent-encoded `raw_path`. Use `raw_path` when you need on-the-wire bytes.
 - `scope->{query_string}` and request bodies are byte data (often percent-encoded). Decode explicitly with `Encode` using replacement or strict modes as needed.
 - Response bodies/headers must be bytes; set `Content-Length` from byte length. Encode with `Encode::encode('UTF-8', $str, FB_CROAK)` (or another charset you declare in `Content-Type`).
 
-Minimal raw example with explicit UTF-8 handling:
+Minimal example with explicit UTF-8 handling:
 
 ```perl
 use Future::AsyncAwait;
@@ -113,7 +83,6 @@ use experimental 'signatures';
 use Encode qw(encode decode FB_DEFAULT FB_CROAK);
 
 async sub app ($scope, $receive, $send) {
-    # Handle lifespan if your server sends it; otherwise fail on unsupported types.
     die "Unsupported: $scope->{type}" if $scope->{type} ne 'http';
 
     my $text = '';
@@ -141,12 +110,7 @@ async sub app ($scope, $receive, $send) {
 }
 ```
 
-For a higher-level default-decoding experience (with raw/strict options), see `PAGI::Simple`.
-Browse the `examples/` directory for end-to-end apps (both raw PAGI and PAGI::Simple) including UTF-8-focused demos.
-
 ## Example Applications
-
-### Raw PAGI Examples
 
 These examples demonstrate the low-level PAGI protocol directly:
 
@@ -162,26 +126,22 @@ These examples demonstrate the low-level PAGI protocol directly:
 | 08-tls-introspection | TLS connection info |
 | 09-psgi-bridge | PSGI compatibility |
 
-### PAGI::Simple Examples
+## Middleware
 
-These examples use the PAGI::Simple micro-framework for easier development:
+PAGI includes a collection of middleware components in `PAGI::Middleware::*`:
 
-| Example | Description |
-|---------|-------------|
-| simple-01-hello | Basic routing, path params, JSON/HTML responses |
-| simple-02-forms | Form processing, REST API, CRUD operations |
-| simple-03-websocket | WebSocket chat with rooms and broadcasting |
-| simple-04-sse | Server-Sent Events with channels |
-| simple-05-streaming | Response streaming helpers (stream/stream_from/send_file) |
-| simple-06-negotiation | Content negotiation via respond_to |
-| simple-07-uploads | Multipart uploads with temp files/validations |
-| simple-08-cookies | Cookies and signed cookies |
-| simple-09-cors | CORS headers and preflight handling |
-| simple-10-logging | Structured logging middleware |
-| simple-11-named-routes | Named routes and redirects |
-| simple-12-mount | Mounting nested PAGI::Simple apps |
-| simple-13-utf8 | UTF-8 defaults plus raw/strict helpers |
-| simple-14-streaming | Streaming request bodies (decode + stream_to_file) |
+- Authentication (Basic, Digest, Bearer)
+- Sessions and Cookies
+- Security (CORS, CSRF, Rate Limiting)
+- Compression (GZIP)
+- Logging and Metrics
+- And many more
+
+See `lib/PAGI/Middleware/` for the full list.
+
+## PAGI::Simple Framework
+
+For a higher-level Express/Sinatra-style framework, see [PAGI::Simple](https://github.com/jjn1056/PAGI-Simple) which is available as a separate distribution.
 
 ## Development
 

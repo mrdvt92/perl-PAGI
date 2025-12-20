@@ -3,7 +3,7 @@ package PAGI;
 use strict;
 use warnings;
 
-our $VERSION = '0.001';
+our $VERSION = '0.001001';
 
 1;
 
@@ -15,7 +15,7 @@ PAGI - Perl Asynchronous Gateway Interface
 
 =head1 VERSION
 
-Version 0.001 (Beta)
+Version 0.001001 (Beta)
 
 =head1 SYNOPSIS
 
@@ -39,17 +39,6 @@ Version 0.001 (Beta)
         });
     }
 
-    # Or use the PAGI::Simple micro-framework
-    use PAGI::Simple;
-
-    my $app = PAGI::Simple->new(name => 'My App');
-
-    $app->get('/' => sub ($c) {
-        $c->text('Hello, World!');
-    });
-
-    $app->to_app;
-
 =head1 DESCRIPTION
 
 PAGI (Perl Asynchronous Gateway Interface) is a specification for asynchronous
@@ -70,10 +59,9 @@ C<$scope->{raw_path}>. If you need exact on-the-wire bytes, use C<raw_path>.
 
 =item *
 C<$scope->{query_string}> and request bodies arrive as percent-encoded or raw
-bytes. Frameworks (e.g., L<PAGI::Simple>) may auto-decode with replacement by
-default, but raw values remain available via C<query_string> and the body
-stream. If you need strict validation, decode yourself with C<Encode> and
-C<FB_CROAK>.
+bytes. Higher-level frameworks may auto-decode with replacement by default, but
+raw values remain available via C<query_string> and the body stream. If you
+need strict validation, decode yourself with C<Encode> and C<FB_CROAK>.
 
 =item *
 Response bodies and header values sent over the wire must be encoded to bytes.
@@ -141,11 +129,6 @@ This distribution includes:
 
 Reference server implementation supporting HTTP/1.1, WebSocket, SSE, and
 multi-worker mode with pre-forking.
-
-=item L<PAGI::Simple>
-
-Express-like micro-framework for building PAGI applications with routing,
-middleware, sessions, and more.
 
 =item L<PAGI::Middleware::*>
 
@@ -217,11 +200,8 @@ Process startup/shutdown lifecycle events
     # Run the test suite
     prove -l t/
 
-    # Start a server with a raw PAGI app
+    # Start a server with a PAGI app
     pagi-server --app examples/01-hello-http/app.pl --port 5000
-
-    # Or with a PAGI::Simple app
-    pagi-server --app examples/simple-01-hello/app.pl --port 5000
 
     # Test it
     curl http://localhost:5000/
@@ -244,7 +224,7 @@ Process startup/shutdown lifecycle events
 
 =item L<PAGI::Server> - Reference server implementation
 
-=item L<PAGI::Simple> - Micro-framework for PAGI applications
+=item L<PAGI::Simple> - Express-like micro-framework (separate distribution)
 
 =item L<PSGI> - The synchronous predecessor to PAGI
 
