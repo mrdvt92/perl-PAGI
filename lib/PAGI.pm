@@ -300,8 +300,6 @@ Raw PAGI example with explicit UTF-8 handling:
 
 =item L<PAGI::Server> - Reference server implementation
 
-=item L<PAGI::Simple> - Express-like micro-framework (separate distribution)
-
 =item L<PAGI::Request> - Convenience wrapper for request handling
 
 =item L<PSGI> - The synchronous predecessor to PAGI
