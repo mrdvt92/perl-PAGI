@@ -25,7 +25,7 @@ This distribution has different stability levels:
 
 ## Requirements
 
-- Perl 5.16+
+- Perl 5.18+
 - cpanminus (for dependency installation)
 
 ## Quick Start

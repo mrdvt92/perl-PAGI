@@ -24,7 +24,7 @@ This skill teaches how to write raw PAGI (Perl Asynchronous Gateway Interface) a
 perl -v
 ```
 
-Extract the version number. PAGI requires Perl 5.16+ (for Future::AsyncAwait).
+Extract the version number. PAGI requires Perl 5.18+ (for Future::AsyncAwait stability).
 
 ### 2. Ask User Target Perl Version
 
@@ -36,13 +36,13 @@ Ask the user which Perl version they're targeting:
 |--------|----------------|
 | **5.36+** (Recommended) | Modern systems, new projects. Cleanest syntax with built-in signatures. |
 | **5.20 - 5.35** | Older systems with experimental signatures support. |
-| **5.16 - 5.19** | Legacy systems. No signatures, use traditional `my (...) = @_;` syntax. |
+| **5.18 - 5.19** | Minimum supported. No signatures, use traditional `my (...) = @_;` syntax. |
 
 **Impact on generated code:**
 
 - **5.36+**: Uses `use 5.36;` which enables strict, warnings, and stable signatures
 - **5.20-5.35**: Uses `use strict; use warnings; use experimental 'signatures';`
-- **5.16-5.19**: Uses `use strict; use warnings;` with `my ($scope, $receive, $send) = @_;`
+- **5.18-5.19**: Uses `use strict; use warnings;` with `my ($scope, $receive, $send) = @_;`
 
 Store the user's choice and apply to ALL generated code examples.
 
@@ -104,7 +104,7 @@ my $app = async sub ($scope, $receive, $send) {
 $app;
 ```
 
-### 5.16 - 5.19 (No Signatures)
+### 5.18 - 5.19 (No Signatures)
 
 ```perl
 use strict;

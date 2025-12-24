@@ -274,7 +274,7 @@ Raw PAGI example with explicit UTF-8 handling:
 
 =over 4
 
-=item * Perl 5.16+
+=item * Perl 5.18+
 
 =item * IO::Async (event loop)
 
