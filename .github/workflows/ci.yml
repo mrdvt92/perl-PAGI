@@ -18,7 +18,7 @@ jobs:
         include:
           # Add 5.16 only on Linux where it's reliably available
           - os: ubuntu-latest
-            perl: '5.16'
+            perl: '5.18'
 
     steps:
       - uses: actions/checkout@v4
