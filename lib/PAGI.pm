@@ -3,7 +3,7 @@ package PAGI;
 use strict;
 use warnings;
 
-our $VERSION = '0.001001';
+our $VERSION = '0.001002';
 
 1;
 
@@ -12,6 +12,18 @@ __END__
 =head1 NAME
 
 PAGI - Perl Asynchronous Gateway Interface
+
+=head1 DEDICATION
+
+This project is dedicated to the memory of Matt S. Trout (mst), who I wish was
+still around to tell me all the things wrong with my code while simultaneously
+offering brilliant ideas to make it better.
+
+Matt encouraged my first CPAN contribution. Without that encouragement, PAGI
+and pretty much everything I've released on CPAN over 20+ years would never
+have happened.
+
+Thank you, Matt. The Perl community misses you.
 
 =head1 VERSION
 
