@@ -17,8 +17,9 @@
 - ~~Filesystem-agnostic path handling~~ **DONE** - Uses `File::Spec->catfile()` throughout
 - ~~File response streaming~~ **DONE** - Supports `file` and `fh` in response body
   - Small files (<=64KB): direct in-process read
-  - Large files: sendfile() when available, worker pool fallback
+  - Large files: async worker pool reads
   - Range requests with offset/length
+  - Use XSendfile middleware for reverse proxy delegation in production
 
 ### Future Enhancements (Not Blockers)
 
