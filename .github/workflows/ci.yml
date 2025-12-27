@@ -35,3 +35,19 @@ jobs:
 
       - name: Run tests
         run: prove -lvr t/
+
+  freebsd:
+    name: FreeBSD
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test on FreeBSD
+        uses: vmactions/freebsd-vm@v1
+        with:
+          usesh: true
+          prepare: |
+            pkg install -y perl5 p5-App-cpanminus
+          run: |
+            cpanm --notest --installdeps .
+            prove -lvr t/
