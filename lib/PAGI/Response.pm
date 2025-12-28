@@ -273,7 +273,18 @@ Send a JSON response with Content-Type: application/json; charset=utf-8.
     await $res->redirect('/login');
     await $res->redirect('/new-url', 301);
 
-Send a redirect response. Default status is 302.
+Send a redirect response with an empty body. Default status is 302.
+
+B<Note:> This method sends the response but does NOT stop Perl execution.
+Use C<return> after redirect if you have more code below:
+
+    await $res->redirect('/login');
+    return;  # Important! Code below would still run otherwise
+
+B<Why no body?> While RFC 7231 suggests including a short HTML body with a
+hyperlink for clients that don't auto-follow redirects, all modern browsers
+and HTTP clients ignore redirect bodies. If you need a body for legacy
+compatibility, use the lower-level C<$send-E<gt>()> calls directly.
 
 =head2 empty
 
@@ -323,8 +334,9 @@ with C<write($chunk)>, C<close()>, and C<bytes_written()> methods.
     );
 
 Send a file as the response. This method uses the PAGI protocol's C<file>
-key, enabling efficient server-side streaming via C<sendfile()> or similar
-zero-copy mechanisms. The file is B<not> read into memory.
+key for efficient server-side streaming. The file is B<not> read into memory.
+For production, use L<PAGI::Middleware::XSendfile> to delegate file serving
+to your reverse proxy.
 
 B<Options:>
 
@@ -1096,7 +1108,6 @@ async sub send_file {
     });
 
     # Use PAGI file protocol for efficient server-side streaming
-    # Server will use sendfile() or similar zero-copy mechanism
     my $body_event = {
         type => 'http.response.body',
         file => $path,

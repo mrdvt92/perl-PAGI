@@ -2,7 +2,7 @@ package PAGI::Server;
 use strict;
 use warnings;
 
-our $VERSION = '0.001002';
+our $VERSION = '0.001005';
 
 use parent 'IO::Async::Notifier';
 use IO::Async::Listener;
@@ -437,41 +437,11 @@ handles IO::Async's C<$ONE_TRUE_LOOP> singleton
 
 =back
 
-=item disable_sendfile => $bool
-
-Disable the sendfile() syscall for file responses. Default: 0 (use sendfile if available).
-
-When C<Sys::Sendfile> is installed and this option is not set, the server uses
-the sendfile() syscall for zero-copy file transfers. This is faster and uses
-less memory than reading files through userspace.
-
-Set this to 1 to force the server to use the worker pool fallback for file I/O,
-which reads files in chunks through IO::Async::Function workers.
-
-B<Reasons to disable sendfile:>
-
-=over 4
-
-=item * Testing worker pool behavior
-
-=item * Working around buggy OS sendfile implementations
-
-=item * Debugging file transfer issues
-
-=item * Using file systems that don't support sendfile (some network mounts)
-
-=back
-
-B<CLI:> C<--disable-sendfile>
-
-B<Startup banner:> Shows sendfile status: C<on>, C<off (Sys::Sendfile not installed)>,
-C<disabled>, or C<n/a (disabled)>.
-
 =item sync_file_threshold => $bytes
 
 Threshold in bytes for synchronous file reads. Files smaller than this value
 are read synchronously in the event loop; larger files use async I/O via
-worker pool or sendfile.
+a worker pool.
 
 B<Default:> 65536 (64KB)
 
@@ -491,34 +461,6 @@ The default (64KB) is optimized for local SSDs where small synchronous reads
 are faster than the overhead of async I/O.
 
 B<CLI:> C<--sync-file-threshold NUM>
-
-=item sendfile_timeout => $seconds
-
-Timeout in seconds for sendfile() socket writability. When using sendfile()
-for large file transfers, the socket buffer may fill up, requiring the server
-to wait for the client to drain it. This timeout prevents indefinite waits.
-
-B<Default:> 30 seconds
-
-This timeout protects against:
-
-=over 4
-
-=item * Slow or unresponsive clients that accept connections but read slowly
-
-=item * Network congestion causing socket buffer backpressure
-
-=item * Malicious clients attempting to tie up server resources
-
-=back
-
-B<Example:>
-
-    # Increase timeout for slow network conditions
-    my $server = PAGI::Server->new(
-        app => $app,
-        sendfile_timeout => 60,  # 60 seconds
-    );
 
 =item max_requests => $count
 
@@ -734,30 +676,25 @@ keys in C<http.response.body> events:
     });
     close $fh;
 
-The server streams files in 64KB chunks to avoid memory bloat. When
-C<Sys::Sendfile> is available and conditions permit (non-TLS, non-chunked),
-the server uses C<sendfile()> for zero-copy I/O. Otherwise, a worker pool
-handles file I/O asynchronously to avoid blocking the event loop.
+The server streams files in 64KB chunks to avoid memory bloat. Small files
+(under 64KB) are read synchronously for speed; larger files use async I/O
+via a worker pool to avoid blocking the event loop.
 
-=head2 Sendfile Caveats and Production Recommendations
+=head2 Production Recommendations for Static Files
 
-B<Warning:> The C<sendfile()> syscall behaves differently across operating
-systems (Linux, FreeBSD, macOS, etc.). While we've implemented workarounds
-for known issues (such as FreeBSD's non-blocking socket behavior), edge
-cases may exist on untested platforms or kernel versions.
-
-B<If you plan to serve static files in production, we strongly recommend:>
+B<For production deployments, we strongly recommend delegating static file
+serving to a reverse proxy:>
 
 =over 4
 
-=item 1. B<Delegate static file serving to nginx or a CDN>
+=item 1. B<Use nginx, Apache, or a CDN>
 
-For production deployments, place nginx (or another reverse proxy) in front
-of PAGI::Server and let it handle static files directly. This provides:
+Place a reverse proxy in front of PAGI::Server and let it handle static
+files directly. This provides:
 
 =over 4
 
-=item * Battle-tested sendfile implementation
+=item * Optimized file serving with kernel sendfile
 
 =item * Efficient caching and compression
 
@@ -767,57 +704,23 @@ of PAGI::Server and let it handle static files directly. This provides:
 
 =back
 
-Example nginx configuration:
+=item 2. B<Use L<PAGI::Middleware::XSendfile>>
 
-    location /static/ {
-        alias /var/www/static/;
-        expires 30d;
-    }
+For files that require authentication or authorization, use the XSendfile
+middleware to delegate file serving to the reverse proxy:
 
-    location / {
-        proxy_pass http://127.0.0.1:5000;
-    }
+    use PAGI::Middleware::Builder;
 
-=item 2. B<Test thoroughly on your target platform>
+    my $app = builder {
+        enable 'XSendfile',
+            type    => 'X-Accel-Redirect',  # For Nginx
+            mapping => { '/var/www/protected/' => '/internal/' };
+        $my_app;
+    };
 
-If you must serve files directly from PAGI::Server, test extensively under
-realistic load conditions on your exact production OS and kernel version.
-
-=item 3. B<Consider disabling sendfile>
-
-If you encounter issues, use C<< disable_sendfile => 1 >> to fall back to
-the worker pool method, which is more portable but slightly slower:
-
-    my $server = PAGI::Server->new(
-        app => $app,
-        disable_sendfile => 1,
-    );
+See L<PAGI::Middleware::XSendfile> for details.
 
 =back
-
-=head2 Troubleshooting Sendfile Issues
-
-B<Error: "sendfile write timeout after N seconds">
-
-This error occurs when the client cannot drain the socket buffer fast enough.
-Common causes and solutions:
-
-=over 4
-
-=item * B<Slow Clients:> Clients on slow networks may need more time. Increase
-the C<sendfile_timeout> parameter or use C<< disable_sendfile => 1 >> to use
-the more portable worker pool fallback.
-
-=item * B<Large Files:> Very large files may need longer timeouts. Consider
-using a dedicated file server (nginx, CDN) for large static assets.
-
-=back
-
-B<FreeBSD-Specific Notes:>
-
-FreeBSD's sendfile() implementation returns C<EAGAIN> with zero bytes sent
-when the socket buffer is completely full. PAGI handles this correctly, but
-constrained environments may hit the timeout more easily.
 
 =head1 ENABLING TLS SUPPORT
 
@@ -964,6 +867,96 @@ See the C<ssl> option in L</CONSTRUCTOR> for details on:
 
 =back
 
+=head1 SIGNAL HANDLING
+
+PAGI::Server responds to Unix signals for process management. Signal behavior
+differs between single-worker and multi-worker modes.
+
+=head2 Supported Signals
+
+=over 4
+
+=item B<SIGTERM> - Graceful shutdown
+
+Initiates graceful shutdown. The server stops accepting new connections,
+waits for active requests to complete (up to C<shutdown_timeout> seconds),
+then exits. In multi-worker mode, SIGTERM is forwarded to all workers.
+
+    kill -TERM <pid>
+
+=item B<SIGINT> - Graceful shutdown (Ctrl-C)
+
+Same behavior as SIGTERM. Triggered by Ctrl-C in the terminal. In multi-worker
+mode, the parent process catches SIGINT and coordinates shutdown of all workers
+to ensure proper lifespan.shutdown handling.
+
+    kill -INT <pid>
+    # or press Ctrl-C in terminal
+
+=item B<SIGHUP> - Graceful restart (multi-worker only)
+
+Performs a zero-downtime restart by spawning new workers before terminating
+old ones. Useful for deploying new code without dropping connections.
+
+    kill -HUP <pid>
+
+In single-worker mode, SIGHUP is logged but ignored (no graceful restart
+possible without multiple workers).
+
+=item B<SIGTTIN> - Increase worker count (multi-worker only)
+
+Spawns an additional worker process. Use this to scale up capacity dynamically.
+
+    kill -TTIN <pid>
+
+=item B<SIGTTOU> - Decrease worker count (multi-worker only)
+
+Gracefully terminates one worker process. The minimum worker count is 1;
+sending SIGTTOU when only one worker remains has no effect.
+
+    kill -TTOU <pid>
+
+=back
+
+=head2 Signal Handling in Multi-Worker Mode
+
+When running with C<< workers => N >> (where N > 1):
+
+=over 4
+
+=item * Parent process manages the worker pool
+
+=item * Workers handle requests; parent handles signals
+
+=item * SIGTERM/SIGINT to parent triggers coordinated shutdown of all workers
+
+=item * Each worker runs lifespan.shutdown before exiting
+
+=item * Workers that crash are automatically respawned
+
+=back
+
+=head2 Examples
+
+B<Zero-downtime deployment:>
+
+    # Deploy new code, then signal graceful restart
+    kill -HUP $(cat /var/run/pagi.pid)
+
+B<Scale workers based on load:>
+
+    # Add workers during peak hours
+    kill -TTIN $(cat /var/run/pagi.pid)
+    kill -TTIN $(cat /var/run/pagi.pid)
+
+    # Remove workers during quiet periods
+    kill -TTOU $(cat /var/run/pagi.pid)
+
+B<Graceful shutdown for maintenance:>
+
+    # Stop accepting new connections, drain existing ones
+    kill -TERM $(cat /var/run/pagi.pid)
+
 =cut
 
 sub _init {
@@ -1017,9 +1010,7 @@ sub _init {
     $self->{max_receive_queue} = delete $params->{max_receive_queue} // 1000;  # Max WebSocket receive queue size (messages)
     $self->{max_ws_frame_size} = delete $params->{max_ws_frame_size} // 65536;  # Max WebSocket frame size in bytes (64KB default)
     $self->{max_connections}     = delete $params->{max_connections} // 0;  # 0 = auto-detect
-    $self->{disable_sendfile}    = delete $params->{disable_sendfile} // 0;  # Disable sendfile() syscall for file responses
     $self->{sync_file_threshold} = delete $params->{sync_file_threshold} // 65536;  # Threshold for sync file reads (0=always async)
-    $self->{sendfile_timeout}    = delete $params->{sendfile_timeout};  # Timeout for sendfile socket writability (undef = use Connection default)
     $self->{request_timeout}     = delete $params->{request_timeout} // 0;  # Request stall timeout in seconds (0 = disabled, default for performance)
     $self->{ws_idle_timeout}     = delete $params->{ws_idle_timeout} // 0;   # WebSocket idle timeout (0 = disabled)
     $self->{sse_idle_timeout}    = delete $params->{sse_idle_timeout} // 0;  # SSE idle timeout (0 = disabled)
@@ -1108,12 +1099,6 @@ sub configure {
     if (exists $params{max_connections}) {
         $self->{max_connections} = delete $params{max_connections};
     }
-    if (exists $params{disable_sendfile}) {
-        $self->{disable_sendfile} = delete $params{disable_sendfile};
-    }
-    if (exists $params{sendfile_timeout}) {
-        $self->{sendfile_timeout} = delete $params{sendfile_timeout};
-    }
     if (exists $params{request_timeout}) {
         $self->{request_timeout} = delete $params{request_timeout};
     }
@@ -1137,17 +1122,6 @@ sub _log {
     return if $level_num < $self->{_log_level_num};
     return if $self->{quiet} && $level ne 'error';
     warn "$msg\n";
-}
-
-# Returns a human-readable sendfile status string for the startup banner
-sub _sendfile_status_string {
-    my ($self) = @_;
-
-    my $available = PAGI::Server::Connection->has_sendfile;
-    if ($self->{disable_sendfile}) {
-        return $available ? 'disabled' : 'n/a (disabled)';
-    }
-    return $available ? 'on' : 'off (Sys::Sendfile not installed)';
 }
 
 # Returns a human-readable TLS status string for the startup banner
@@ -1320,9 +1294,8 @@ async sub _listen_singleworker {
     my $loop_class = ref($self->loop);
     $loop_class =~ s/^IO::Async::Loop:://;  # Shorten for display
     my $max_conn = $self->effective_max_connections;
-    my $sendfile_status = $self->_sendfile_status_string;
     my $tls_status = $self->_tls_status_string;
-    $self->_log(info => "PAGI Server listening on $scheme://$self->{host}:$self->{bound_port}/ (loop: $loop_class, max_conn: $max_conn, sendfile: $sendfile_status, tls: $tls_status)");
+    $self->_log(info => "PAGI Server listening on $scheme://$self->{host}:$self->{bound_port}/ (loop: $loop_class, max_conn: $max_conn, tls: $tls_status)");
 
     return $self;
 }
@@ -1371,30 +1344,26 @@ sub _listen_multiworker {
     $loop_class =~ s/^IO::Async::Loop:://;  # Shorten for display
     my $mode = $reuseport ? 'reuseport' : 'shared-socket';
     my $max_conn = $self->effective_max_connections;
-    my $sendfile_status = $self->_sendfile_status_string;
     my $tls_status = $self->_tls_status_string;
-    $self->_log(info => "PAGI Server (multi-worker, $mode) listening on $scheme://$self->{host}:$self->{bound_port}/ with $workers workers (loop: $loop_class, max_conn: $max_conn/worker, sendfile: $sendfile_status, tls: $tls_status)");
+    $self->_log(info => "PAGI Server (multi-worker, $mode) listening on $scheme://$self->{host}:$self->{bound_port}/ with $workers workers (loop: $loop_class, max_conn: $max_conn/worker, tls: $tls_status)");
 
-    # Set up signal handlers using IO::Async's watch_signal (replaces _setup_parent_signals)
-    # Note: Windows doesn't support Unix signals, so this is skipped there
-    # (Multi-worker mode won't work on Windows anyway due to fork() limitations)
     my $loop = $self->loop;
+
+    # Fork the workers FIRST, before setting up signal handlers.
+    # This prevents children from inheriting the parent's sigpipe setup,
+    # which can cause issues with Ctrl-C signal delivery on macOS.
+    for my $i (1 .. $workers) {
+        $self->_spawn_worker($listen_socket, $i);
+    }
+
+    # Set up signal handlers for parent process AFTER forking
+    # Note: Windows doesn't support Unix signals, so this is skipped there
     unless (WIN32) {
         $loop->watch_signal(TERM => sub { $self->_initiate_multiworker_shutdown });
         $loop->watch_signal(INT  => sub { $self->_initiate_multiworker_shutdown });
-        # HUP = graceful restart (replace all workers)
         $loop->watch_signal(HUP => sub { $self->_graceful_restart });
-
-        # TTIN = increase workers by 1
         $loop->watch_signal(TTIN => sub { $self->_increase_workers });
-
-        # TTOU = decrease workers by 1
         $loop->watch_signal(TTOU => sub { $self->_decrease_workers });
-    }
-
-    # Fork the workers
-    for my $i (1 .. $workers) {
-        $self->_spawn_worker($listen_socket, $i);
     }
 
     # Store the socket for cleanup during shutdown (only in traditional mode)
@@ -1484,16 +1453,21 @@ sub _spawn_worker {
     my $loop = $self->loop;
     weaken(my $weak_self = $self);
 
-    # Use $loop->fork() instead of POSIX fork() to properly:
-    # 1. Clear $ONE_TRUE_LOOP in child (so child gets fresh loop)
-    # 2. Reset signal handlers in child
-    # 3. Call post_fork() for loop backends that need it (epoll, kqueue)
+    # Set IGNORE before fork - child inherits it. IO::Async only resets
+    # CODE refs, so 'IGNORE' (a string) survives. Child must NOT call
+    # watch_signal(INT) or it will overwrite the IGNORE.
+    my $old_sigint = $SIG{INT};
+    $SIG{INT} = 'IGNORE' unless WIN32;
+
     my $pid = $loop->fork(
         code => sub {
             $self->_run_as_worker($listen_socket, $worker_num);
-            return 0;  # Exit code (may not be reached if worker calls exit())
+            return 0;
         },
     );
+
+    # Restore parent's SIGINT handler
+    $SIG{INT} = $old_sigint unless WIN32;
 
     die "Fork failed" unless defined $pid;
 
@@ -1537,8 +1511,9 @@ sub _spawn_worker {
 sub _run_as_worker {
     my ($self, $listen_socket, $worker_num) = @_;
 
-    # Note: Signal handlers already reset by $loop->fork() (keep_signals defaults to false)
     # Note: $ONE_TRUE_LOOP already cleared by $loop->fork(), so this creates a fresh loop
+    # Note: $SIG{INT} = 'IGNORE' inherited from parent - do NOT call watch_signal(INT)
+    #       or it will overwrite the IGNORE with a CODE ref!
     my $loop = IO::Async::Loop->new;
 
     # In reuseport mode, each worker creates its own listening socket
@@ -1583,6 +1558,8 @@ sub _run_as_worker {
     # Set up graceful shutdown on SIGTERM using IO::Async's signal watching
     # (raw $SIG handlers don't work reliably when the loop is running)
     # Note: Windows doesn't support Unix signals, so this is skipped there
+    # Note: We do NOT set up watch_signal(INT) here - workers inherit $SIG{INT}='IGNORE'
+    #       from parent, so they ignore SIGINT (including Ctrl-C). Parent sends SIGTERM.
     unless (WIN32) {
         my $shutdown_triggered = 0;
         $loop->watch_signal(TERM => sub {
@@ -1696,9 +1673,7 @@ sub _on_connection {
         access_log        => $self->{access_log},
         max_receive_queue => $self->{max_receive_queue},
         max_ws_frame_size => $self->{max_ws_frame_size},
-        disable_sendfile  => $self->{disable_sendfile},
         sync_file_threshold => $self->{sync_file_threshold},
-        (defined $self->{sendfile_timeout} ? (sendfile_timeout => $self->{sendfile_timeout}) : ()),
     );
 
     # Track the connection (O(1) hash insert)
